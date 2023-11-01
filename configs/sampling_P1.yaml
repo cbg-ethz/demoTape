@@ -1,0 +1,23 @@
+general:
+  input-loom: <PATH>/<FILE>.loom
+  output-folder: <PATH>
+
+sampling:
+  runs: 2
+  cell_no: [500, 1000, 1500, 2000, 3000, 4000]
+
+COMPASS:
+  run: False
+  exe: <PATH>/COMPASS/COMPASS
+  chain_length: 50000
+
+BnpC:
+  run: True
+  exe: <PATH>/BnpC/run_BnpC.py
+  chain_length: 10000
+
+SCG:
+  run: False
+  wrapper_exe: ../sandbox/SCG_wrapper.py
+  exe: <PATH>/scg/scg-0.3.1/scg
+  chain_length: 100000

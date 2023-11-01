@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+
+SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
+SAMPLES_N = len(config['general']['input-looms'])
+REPEATS = range( config['simulations'].get('repeats', 1))
+OUT_DIR = config['general']['output-folder']
+
+
+##### Target rules #####
+rule all:
+    input:
+        os.path.join(OUT_DIR, 'summary.tsv')
+
+
+##### Modules #####
+if config.get('simulations', {}).get('run_early', False):
+    include: 'rules/common.smk'
+    include: 'rules/gatk_multiplex.smk'
+    include: 'rules/dna_part2_multiplex.smk'
+
+include: 'rules/simulations.smk'

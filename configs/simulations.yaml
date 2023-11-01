@@ -1,0 +1,21 @@
+general:
+  input-looms: [<PATH>/<FILE1>.loom, <PATH>/<FILE2>.loom, <PATH>/<FILE3>.loom]
+  output-folder: <PATH>
+
+simulations:
+  run_early: False
+  repeats: 1
+  fractions: [0.33, 0.33, 0.33] # [[0.6, 0.3, 0.1]] # [0.33, 0.33, 0.33]
+  doublets: [0.1] # [0.3]
+
+scSplit:
+  run: True
+  exe: <PATH>/scSplit/scSplit
+
+souporcell:
+  run: True
+  exe: <PATH>/souporcell/souporcell/target/release/souporcell
+  troublet: <PATH>/souporcell/troublet/target/release/troublet
+
+vireo:
+  run: True

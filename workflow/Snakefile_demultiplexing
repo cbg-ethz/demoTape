@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+
+import os
+
+SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
+OUT_DIR = config['general']['output-folder']
+IN_FILE_ABS = config['general']['input-loom']
+IN_FILE_NAME = os.path.splitext(os.path.basename(IN_FILE_ABS))[0]
+SAMPLES = config['general']['samples']
+RUNS = range(config['algorithms'].get('runs', 10))
+
+DOUBLET_RATE = config['algorithms'].get('doublet_rates', [0.08, 0.3])
+
+
+all_files = []
+for cl in range(SAMPLES):
+    all_files.append(os.path.join(OUT_DIR, f'cl{cl}_coclustering_BnpC_d-1.png'))
+    for dbt in DOUBLET_RATE:
+        all_files.append(os.path.join(OUT_DIR, f'cl{cl}_coclustering_COMPASS_d{dbt}.png'))
+        all_files.append(os.path.join(OUT_DIR, f'cl{cl}_coclustering_SCG_d{dbt}.png'))
+
+
+##### Target rules #####
+rule all:
+    input:
+        all_files
+
+
+##### Modules #####
+include: 'rules/demultiplexing.smk'

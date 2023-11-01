@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+
+SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
+OUT_DIR = config['general']['output-folder']
+
+RUNS_TOTAL = config['sampling']['runs']
+RUNS_NO = [f'{i:04d}' for i in range(RUNS_TOTAL)]
+CELL_NO = config['sampling']['cell_no']
+CELL_STR = '-'.join([str(i) for i in CELL_NO])
+DOUBLET_RATE = config['sampling'].get('doublet_rates', [0.08, 0.3])
+
+
+
+##### Target rules #####
+rule all:
+    input:
+        os.path.join(OUT_DIR, f'summary.r{RUNS_TOTAL}.c{CELL_STR}.tsv')
+
+
+##### Modules #####
+include: 'rules/sampling.smk'
