@@ -9,7 +9,8 @@ OUT_DIR = config['general']['output-folder']
 ##### Target rules #####
 rule all:
     input:
-        os.path.join(OUT_DIR, 'summary.tsv')
+        os.path.join(OUT_DIR, 'summary.png'),
+        os.path.join(OUT_DIR, 'benchmark_summary.png')
 
 
 ##### Modules #####

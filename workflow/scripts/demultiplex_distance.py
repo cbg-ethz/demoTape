@@ -1,31 +1,29 @@
 #!/usr/bin/env python3
 
 import argparse
-import copy
 from itertools import combinations
 import os
 import re
 
 import numpy as np
-import matplotlib
-# matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import pandas as pd
-from scipy.cluster.hierarchy import linkage, cut_tree
-from scipy.spatial.distance import pdist, euclidean
+from scipy.cluster.hierarchy import linkage, cut_tree, leaves_list
+from scipy.spatial.distance import pdist, euclidean, cityblock
 from scipy.special import comb
+from scipy.stats import binom, kstest
 import seaborn as sns
 from seaborn import clustermap
 
+EPSILON = np.finfo(np.float64).resolution
 
 COLORS = ['#e41a1c', '#377eb8', '#4daf4a', '#E4761A' , '#2FBF85'] # '#A4CA55'
 COLORS = ['#a6cee3', '#1f78b4', '#b2df8a', '#33a02c', '#fb9a99', '#e31a1c',
     '#fdbf6f', '#ff7f00', '#cab2d6', '#6a3d9a', '#ffff99', '#b15928']
-COLORS_STR = ['red', 'blue', 'green', 'orange', 'mint']
 
-WHITELIST = []
-WL_IDS = []
+COLORS = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080', '#ffffff', '#000000']
+COLORS_STR = ['red', 'blue', 'green', 'orange', 'mint']
 
 
 FILE_EXT = 'png'
@@ -49,204 +47,308 @@ plt.rcParams['xtick.major.width'] = 1.5
 plt.rcParams['xtick.bottom'] = True
 
 
-def dist_nan(u, v, scale=True):
-    valid = ~np.isnan(u) & ~np.isnan(v)
-    if scale:
-        return euclidean(u[valid], v[valid]) / np.sqrt(np.sum(2**2 * valid.size))
-    else:
-        return euclidean(u[valid], v[valid])
+class demoTape:
+    def __init__(self, in_file, cl_no, distance='manhatten'):
+        self.sgt_cl_no = cl_no
+        self.dbt_cl_no = int(comb(self.sgt_cl_no, 2))
+
+        # Get full data
+        df = pd.read_csv(in_file, index_col=[0, 1], dtype={'CHR': str})
+        self.SNPs = df.apply(
+            lambda x: f'chr{x.name[0]}:{x.name[1]} {x["REF"]}>{x["ALT"]}',
+            axis=1)
+        self.rel_SNPs = np.ones(self.SNPs.size, dtype=bool)
+        df.drop(['REF', 'ALT', 'REGION', 'NAME', 'FREQ'], axis=1, inplace=True)
+        self.cells = df.columns.values
+
+        # Get true clusters, if simulated data
+        true_cl = []
+        for cell in df.columns:
+            if 'pat' in cell:
+                s1 = int(re.split(r'[\.,]', cell.split('+')[0])[-1][3:])
+            else:
+                s1 = 0
+
+            if '+' in cell:
+                s2 = int(re.split(r'[\.,]', cell.split('+')[1])[-1][3:])
+                true_cl.append('+'.join([str(j) for j in sorted([s1, s2])]))
+            else:
+                true_cl.append(s1)
+        self.true_cl = np.array(true_cl)
+
+        # Init variables
+        self.Z = np.array([])
+        self.assignment = np.array([])
+        self.profiles = np.array([])
+        self.sgt_ids = np.array([])
+        self.dbt_ids = np.array([])
+        self.dbt_map = {}
+
+        self.get_data(df)
 
 
-def merge_gt(gt_in):
-    # 00=0, 11=1, 22=2,
-    # 33=3; 03=0, 13=1, 23=2;
-    # 01=1, 02=1, 12=1
-    if gt_in[0] == gt_in[1]:
-        return gt_in[0]
-    elif np.isnan(gt_in[0]):
-        return gt_in[1]
-    elif np.isnan(gt_in[1]):
-        return gt_in[0]
-    else:
-        return 1
+    def __str__(self):
+        out_str = '\ndemoTape:\n' \
+            f'\tFile: {self.in_file}\n' \
+            f'\t# Samples: {self.cl_no}\n' \
+            f'\tCells: {self.cells}:\n' \
+            f'\tSNPs: {self.SNPs}\n'
+        return out_str
 
 
-def main(args):
-    in_files = []
-
-    if len(args.input) == 1 and os.path.isdir(args.input[0]):
-        for file in os.listdir(args.input[0]):
-            if file.endswith('_variants.csv'):
-                in_files.append(os.path.join(args.input[0], file))
-    else:
-        in_files = args.input
-
-    for file_name in in_files:
-        df_new = dist_clustering(file_name, args)
-        df_new['file'] = file_name
-        try:
-            df = pd.concat([df, df_new])
-        except NameError:
-            df = df_new
-
-    if args.output_summary:
-        df.to_csv(args.output_summary, sep='\t')
+    @staticmethod
+    def metric(c1, c2):
+        pass
 
 
-def dist_clustering(in_file, args):
-    df = pd.read_csv(in_file, index_col=[0, 1], dtype={'CHR': str})
+    def get_data(self, df):
+        pass
 
-    labels = df.apply(lambda x:
-            #f'{x.name[0]}_{x.name[1]} ({x["NAME"]}): {x["REF"]}>{x["ALT"]}',
-            f'chr{x.name[0]}:{x.name[1]} {x["REF"]}>{x["ALT"]}',
-        axis=1)
-    if WHITELIST:
-        var_ids = df.apply(lambda x: f'{x.name[0]}_{x.name[1]}', axis=1)
-        WL_IDS.extend(np.argwhere(np.isin(var_ids.values, WHITELIST)).flatten())
 
-    df.drop(['REF', 'ALT', 'REGION', 'NAME', 'FREQ'], axis=1, inplace=True)
+    def get_pairwise_dists(self):
+        pass
 
-    split_pat = '[\.,+]'
-    true_cl = []
-    for cell in df.columns:
-        if 'pat' in cell:
-            s1 = int(re.split('[\.,]', cell.split('+')[0])[-1][3:])
-        else:
-            s1 = 0
 
-        if '+' in cell:
-            s2 = int(re.split('[\.,]', cell.split('+')[1])[-1][3:])
-            true_cl.append('+'.join([str(j) for j in sorted([s1, s2])]))
-        else:
-            true_cl.append(s1)
-    true_cl = np.array(true_cl)
+    def get_profile(self, cl):
+        pass
 
-    gt = df.applymap(lambda x: float(x.split(':')[-1])).values.T
-    gt[gt == 3] = np.nan
 
-    dist = pdist(gt, dist_nan)
-    Z = linkage(dist, 'ward')
+    def check_hom_match(self, scl, dcl):
+        pass
 
-    # i.e., if synthetic data without doublets
-    if args.no_doublets:
-        cl_no = args.clusters
-    else:
-        dbt_cl_no = int(comb(args.clusters, 2))
-        cl_no = args.clusters + dbt_cl_no
 
-    while True:
-        done = True
-        clusters = cut_tree(Z, n_clusters=cl_no).flatten()
-        # plot_heatmap(gt, Z, true_cl, [i for i in map(str, clusters)], labels, None)
 
-        profiles = np.zeros(shape=(cl_no, gt.shape[1]))
-        for cl_id in range(cl_no):
-            profiles[cl_id] = np.nanmean(gt[clusters == cl_id], axis=0)
+    def demultiplex(self):
+        self.init_dendrogram()
+        self.identify_doublets()
+        self.merge_surplus_singlets()
 
-        dbt_profiles = np.zeros(shape=(int(comb(cl_no, 2)), gt.shape[1]))
+
+# -------------------------------- DENDROGRAM ----------------------------------
+
+    def init_dendrogram(self):
+        dist = self.get_pairwise_dists()
+        self.Z = np.clip(linkage(np.nan_to_num(dist, 0.5), method='ward'), 0, None)
+
+
+# ---------------------------- IDENTIFY DOUBLETS -------------------------------
+
+    def identify_doublets(self):
+        cl_no = self.sgt_cl_no + self.dbt_cl_no
+        # Generate clusters until (n, 2) doublets clusters are identified
+        while True:
+            self.set_assignment(cl_no)
+            self.set_dbt_ids()
+
+            if self.dbt_ids.size == self.dbt_cl_no:
+                break
+            elif cl_no == (self.sgt_cl_no + self.dbt_cl_no) * 3:
+                print(f'Could not identify all doublets.')
+                self.set_assignment(self.sgt_cl_no + self.dbt_cl_no)
+                self.set_dbt_ids()
+                break
+            cl_no += 1
+            print(f'Increasing cuttree clusters to {cl_no}')
+
+
+    def set_assignment(self, cl_no):
+        self.assignment = cut_tree(self.Z, n_clusters=cl_no).flatten()
+        clusters = np.unique(self.assignment)
+        self.profiles = np.zeros(shape=(clusters.size, self.prof_len))
+        for cl_id, cl in enumerate(clusters):
+            self.profiles[cl_id] = self.get_profile(cl)
+
+
+
+    def set_dbt_ids(self):
+        cl_size  = np.unique(self.assignment, return_counts=True)[1] / self.cells.size
+        cl_no = cl_size.size
+
+        dbt_map = {}
+        dbt_ids = []
+
+        dbt_profiles = np.zeros(shape=(int(comb(cl_no, 2)), self.prof_len))
         dbt_combs = []
 
         for i, combo in enumerate(combinations(range(cl_no), 2)):
-            dbt_profiles[i] = np.apply_along_axis(merge_gt, axis=0,
-                arr=profiles[combo,:].round())
-            dbt_combs.append(f'{combo[0]}+{combo[1]}')
+            dbt_profiles[i] = self.get_profile(combo)
+            dbt_combs.append(combo)
 
-        dbt_cl_map = {}
-        dbt_ids = []
-        if not args.no_doublets and args.clusters > 1:
-            df_dbt = pd.DataFrame([], columns=dbt_combs, index=range(cl_no))
-            for i in range(cl_no):
-                df_dbt.loc[i] = np.apply_along_axis(dist_nan, 1, dbt_profiles,
-                    profiles[i])
+        df_dbt = pd.DataFrame([], columns=dbt_combs, index=range(cl_no))
+        for i in range(cl_no):
+            df_dbt.loc[i] = np.apply_along_axis(self.metric, 1, dbt_profiles,
+                self.profiles[i])
+            for j in dbt_combs:
+                # set doublet combo dist to np.nan if:
+                # 1. Singlet is included in Dbt cluster
+                # 2. Dbt cluster size is larger than one of the two clusters
+                if i in j or  cl_size[i] > cl_size[[*j]].min() * 2:
+                    df_dbt.loc[i, [j]] = np.nan
 
-            for i in range(cl_no):
-                for j in dbt_combs:
-                    if str(i) in j:
-                        df_dbt.loc[i, j] = np.nan
+        # Set dbt combo dists to np.nan if their profiles are very close
+        for i in dbt_combs:
+            if self.metric(self.profiles[i[0]], self.profiles[i[1]]) < 0.05:
+                df_dbt.loc[:, [i]] = np.nan
 
-            for i in dbt_combs:
-                i1, i2 = map(int, i.split('+'))
-                if dist_nan(profiles[i1], profiles[i2]) < 0.1:
-                    df_dbt.loc[:, i] = np.nan
+        # Run until (n, 2) doublet identified or no more value to consider
+        while len(dbt_ids) < self.dbt_cl_no:
+            # Check if dist array is empty or all np.nan
+            if df_dbt.size == 0 or df_dbt.isna().sum().sum() == df_dbt.size:
+                print('Cannot solve doublet clusters')
+                break
 
-            # Run until (3, 2) doublet identified or no more value to consider
-            while len(dbt_ids) < comb(args.clusters, 2):
-                # Check if dist array is empty all all na
-                if df_dbt.size == 0 or df_dbt.isna().sum().sum() == df_dbt.size:
-                    print('Cannot solve doublet clusters')
-                    done = False
-                    break
+            cl_idx, dbt_idx = np.where(df_dbt == df_dbt.min().min())
+            cl_id = df_dbt.index[cl_idx[0]]
+            dbt_id = df_dbt.columns[dbt_idx[0]]
 
-                cl_idx, dbt_idx = np.where(df_dbt == df_dbt.min().min())
-                cl_id = df_dbt.index[cl_idx[0]]
-                dbt_id = df_dbt.columns[dbt_idx[0]]
+            # Allow max 1 missmatch
+            if self.check_hom_match(cl_id, dbt_id) > 1:
+                df_dbt.loc[cl_id, [dbt_id]] = np.nan
+                continue
 
-                dcl1, dcl2 = map(int, dbt_id.split('+'))
+            dbt_ids.append(cl_id)
+            dbt_map[cl_id] = dbt_id
+            # Remove cluster row
+            rm_rows = [cl_id] + list(dbt_id)
+            df_dbt.drop(rm_rows, axis=0, inplace=True, errors='ignore')
+            # Remove doublet rows including cluster
+            rm_cols = [dbt_id] + [i for i in dbt_combs if cl_id in i]
+            df_dbt.drop(rm_cols, axis=1, inplace=True, errors='ignore') # Ignore error on already dropped labels
 
-                hom_dcl1 = set(np.argwhere(profiles[dcl1] > 1.5).flatten())
-                hom_dcl2 = set(np.argwhere(profiles[dcl2] > 1.5).flatten())
+        self.sgt_ids = np.array([i for i in np.unique(self.assignment) \
+            if not i in dbt_ids])
+        self.dbt_ids = np.array(dbt_ids)
+        self.dbt_map = dbt_map
 
-                hom12_id = np.array(list(hom_dcl1 & hom_dcl2))
-                hom1_id = np.array(list(hom_dcl1 - hom_dcl2))
-                hom2_id = np.array(list(hom_dcl2 - hom_dcl1))
-                # Check if both hom match
-                if hom12_id.size > 0:
-                    hom12_match = profiles[cl_id][hom12_id] > 1.5
+        self.plot_heatmap(rel_SNPs_only=True)
+        import pdb; pdb.set_trace()
+
+
+    def get_cl_map(self):
+        if self.sgt_ids.size == 0:
+            cl_map = {i: i for i in np.unique(self.assignment)}
+            assignment_str = [str(i) for i in self.assignment]
+        else:
+            # Rename clusters to range from 0 to n
+            cl_map = {j: str(i) for i, j in enumerate(self.sgt_ids)}
+            for i, j in self.dbt_map.items():
+                cl_map[i] = '+'.join(sorted([cl_map[j[0]], cl_map[j[1]]]))
+
+            assignment_str = np.full(self.cells.size, '-1', dtype='<U3')
+            for i, j in enumerate(self.assignment):
+                assignment_str[i] = cl_map[j]
+        return cl_map, assignment_str
+
+
+
+# ------------------------- MERGE SURPLUS SINGLETS -----------------------------
+
+    def merge_surplus_singlets(self):
+        # Merge surplus single clusters
+        while self.sgt_ids.size > self.sgt_cl_no:
+            sgt_dists = self.get_sgt_dist_matrix()
+            while True:
+                # Connect solve doublet merging without conflict
+                if np.nansum(sgt_dists) == 0:
+                    sgt_dists = self.get_sgt_dist_matrix()
+                    sgt1_idx, sgt2_idx = np.where(sgt_dists == np.nanmin(sgt_dists))
+                    cl1 = self.sgt_ids[sgt1_idx[0]]
+                    cl2 = self.sgt_ids[sgt2_idx[0]]
+
+                    dbt_map_new, _ = self.update_dbt_map(cl1, cl2)
+                # Possible clusters to merge left
                 else:
-                    hom12_match = []
-                # Check if hom on cl1 match
-                if hom1_id.size > 0:
-                    hom1_match = (profiles[cl_id][hom1_id] >= 0.5) \
-                        & (profiles[cl_id][hom1_id] < 1.5)
-                else:
-                    hom1_match = []
-                # Check if hom on cl2 match
-                if hom2_id.size > 0:
-                    hom2_match = (profiles[cl_id][hom2_id] >= 0.5) \
-                        & (profiles[cl_id][hom2_id] < 1.5)
-                else:
-                    hom2_match = []
+                    sgt1_idx, sgt2_idx = np.where(sgt_dists == np.nanmin(sgt_dists))
+                    cl1 = self.sgt_ids[sgt1_idx[0]]
+                    cl2 = self.sgt_ids[sgt2_idx[0]]
 
-                hom_match = np.concatenate([hom12_match, hom1_match, hom2_match]).mean()
-                print(f'Doublet cluster similarity: {hom_match:.3f}')
-                if hom_match < 0.95:
-                    print(f'Hom. match between {cl_id} and {dbt_id} low: {hom_match:.3f}')
-                    done = False
-                    break
+                    dbt_map_new, consistent = self.update_dbt_map(cl1, cl2)
+                    if len(dbt_map_new.values()) != len(set(dbt_map_new.values())):
+                        consistent = False
 
-                dbt_ids.append(cl_id)
-                dbt_cl_map[cl_id] = dbt_id
-                # Remove cluster row
-                rm_rows = [cl_id, dcl1, dcl2]
-                df_dbt.drop(rm_rows, axis=0, inplace=True, errors='ignore')
-                # Remove doublet rows including cluster
-                rm_cols = [dbt_id] + [i for i in dbt_combs if str(cl_id) in i]
-                df_dbt.drop(rm_cols, axis=1, inplace=True, errors='ignore') # Ignore error on already dropped labels
+                    if not consistent:
+                        sgt_dists[sgt1_idx, sgt2_idx] = np.nan
+                        continue
 
-        if done:
-            break
-        cl_no += 1
-        print(f'Increasing cuttree clusters to {cl_no}')
+                break
 
-    def get_sgt_dist_matrix(ids, profiles):
-        mat = np.zeros((ids.size, ids.size))
-        for i, j in enumerate(ids):
-            mat[i] = np.apply_along_axis(dist_nan, 1, profiles[ids], profiles[j])
-        mat[np.tril_indices(ids.size)] = np.nan
+            # if not consistent:
+            #     self.plot_heatmap()
+            #     import pdb; pdb.set_trace()
+
+            self.dbt_map = dbt_map_new
+
+            # Remove cl2
+            self.assignment[self.assignment == cl2] = cl1
+            self.assignment[self.assignment > cl2] -= 1
+
+            self.sgt_ids = self.sgt_ids[np.where(self.sgt_ids != cl2)]
+            self.profiles = np.delete(self.profiles, cl2, axis=0)
+
+            self.dbt_ids[self.dbt_ids > cl2] -= 1
+            self.sgt_ids[self.sgt_ids > cl2] -= 1
+
+            if np.unique(self.dbt_ids).size != self.dbt_ids.size:
+                print('Removing 1 obsolete doublet cluster')
+                self.dbt_ids = np.unique(self.dbt_ids)
+            elif self.dbt_ids.size != len(self.dbt_map):
+                print('Removing 1 obsolete doublet cluster')
+                rem_dbt_cl = (set(self.dbt_ids) - set(self.dbt_map.keys())).pop()
+
+                self.assignment[self.assignment == rem_dbt_cl] = cl1
+                self.assignment[self.assignment > rem_dbt_cl] -= 1
+                self.dbt_ids = np.delete(self.dbt_ids,
+                    np.argwhere(self.dbt_ids == rem_dbt_cl))
+                self.sgt_ids[self.sgt_ids > rem_dbt_cl] -= 1
+                self.dbt_ids[self.dbt_ids > rem_dbt_cl] -= 1
+
+                self.dbt_map, _ = self.update_dbt_map(cl1, rem_dbt_cl)
+
+            if len(self.dbt_map.values()) != len(set(self.dbt_map.values())):
+                print('Removing 1 equal doublet cluster')
+                print(self.dbt_map)
+                eq_dbt = sorted([i for i,j in self.dbt_map.items() \
+                    if list(self.dbt_map.values()).count(j) > 1])
+
+                self.assignment[self.assignment == eq_dbt[1]] = eq_dbt[0]
+                self.assignment[self.assignment > eq_dbt[1]] -= 1
+                self.dbt_ids = np.delete(self.dbt_ids,
+                    np.argwhere(self.dbt_ids == eq_dbt[1]))
+                self.sgt_ids[self.sgt_ids > eq_dbt[1]] -= 1
+                self.dbt_ids[self.dbt_ids > eq_dbt[1]] -= 1
+
+                self.dbt_map.pop(eq_dbt[1])
+                self.dbt_map, _ = self.update_dbt_map(eq_dbt[0], eq_dbt[1])
+
+                cl1 = eq_dbt[0]
+
+            # Update profile
+            self.profiles[cl1] = self.get_profile(cl1)
+
+
+
+    def get_sgt_dist_matrix(self):
+        mat = np.zeros((self.sgt_ids.size, self.sgt_ids.size))
+        for i, j in enumerate(self.sgt_ids):
+            mat[i] = np.apply_along_axis(self.metric, 1,
+                self.profiles[self.sgt_ids], self.profiles[j])
+        mat[np.tril_indices(self.sgt_ids.size)] = np.nan
         return mat
 
-    def update_dbt_map(dbt_cl_map, new_cl, del_cl):
-        dbt_cl_map_new = {}
+
+    def update_dbt_map(self, new_cl, del_cl):
+        dbt_map_new = {}
         consistent = True
-        for new_key, val in dbt_cl_map.items():
+        for new_key, val in self.dbt_map.items():
             if new_key > del_cl:
                 new_key -= 1
 
-            sgt1, sgt2 = map(int, val.split('+'))
+            sgt1, sgt2 = val
             if sgt1 == del_cl:
                 sgt1 = new_cl
             elif sgt1 > del_cl:
                 sgt1 = sgt1 - 1
+
             if sgt2 == del_cl:
                 sgt2 = new_cl
             elif sgt2 > del_cl:
@@ -256,324 +358,585 @@ def dist_clustering(in_file, args):
             if sgt1 == sgt2:
                 consistent = False
             else:
-                dbt_cl_map_new[new_key] = '+'.join(sorted([str(sgt1), str(sgt2)]))
+                dbt_map_new[new_key] = tuple(sorted([sgt1, sgt2]))
 
-        return dbt_cl_map_new, consistent
+        return dbt_map_new, consistent
 
 
-    dbt_ids = np.array(dbt_ids)
-    sgt_ids = np.array([i for i in np.arange(cl_no) if not i in dbt_ids])
-    # Merge surplus single clusters
-    while sgt_ids.size > args.clusters:
-        sgt_dists = get_sgt_dist_matrix(sgt_ids, profiles)
-        merge_failed = True
-        while True:
-            if np.nansum(sgt_dists) == 0:
-                merge_failed = True
-                sgt_dists = get_sgt_dist_matrix(sgt_ids, profiles)
+    # ------------------------ HEATMAP GENERATION ------------------------------
 
-            sgt1_idx, sgt2_idx = np.where(sgt_dists == np.nanmin(sgt_dists))
-            cl1 = sgt_ids[sgt1_idx[0]]
-            cl2 = sgt_ids[sgt2_idx[0]]
+    @staticmethod
+    def get_cmap():
+        pass
 
-            dbt_cl_map_new, consistent = update_dbt_map(dbt_cl_map, cl1, cl2)
-            if len(dbt_cl_map_new.values()) != len(set(dbt_cl_map_new.values())):
-                consistent = False
 
-            if not consistent and not merge_failed:
-                sgt_dists[sgt1_idx, sgt2_idx] = np.nan
-                continue
-            break
+    def get_hm_data(self):
+        pass
 
-        dbt_cl_map = dbt_cl_map_new
 
-        # Remove cl2
-        clusters[clusters == cl2] = cl1
-        clusters[clusters > cl2] -= 1
+    @staticmethod
+    def get_cm_specifics():
+        pass
 
-        sgt_ids = np.delete(sgt_ids, sgt2_idx[0])
-        profiles = np.delete(profiles, cl2, axis=0)
 
-        dbt_ids[dbt_ids > cl2] -= 1
-        sgt_ids[sgt_ids > cl2] -= 1
+    @staticmethod
+    def apply_cm_specifics(cm):
+        pass
 
-        if dbt_ids.size != len(dbt_cl_map):
-            print('Removing 1 obsolete doublet cluster')
-            rem_dbt_cl = (set(dbt_ids) - set(dbt_cl_map.keys())).pop()
 
-            clusters[clusters == rem_dbt_cl] = cl1
-            clusters[clusters > rem_dbt_cl] -= 1
-            dbt_ids = np.delete(dbt_ids, np.argwhere(dbt_ids == rem_dbt_cl))
-            sgt_ids[sgt_ids > rem_dbt_cl] -= 1
-            dbt_ids[dbt_ids > rem_dbt_cl] -= 1
+    def plot_heatmap(self, out_file='', cluster=True, rel_SNPs_only=False):
+        cmap = self.get_cmap()
 
-            dbt_cl_map, _ = update_dbt_map(dbt_cl_map, cl1, rem_dbt_cl)
-
-        if len(dbt_cl_map.values()) != len(set(dbt_cl_map.values())):
-            print('Removing 1 equal doublet cluster')
-            eq_dbt = [i for i,j in dbt_cl_map.items() \
-                if list(dbt_cl_map.values()).count(j) > 1]
-
-            clusters[clusters == eq_dbt[1]] = eq_dbt[0]
-            clusters[clusters > eq_dbt[1]] -= 1
-            dbt_ids = np.delete(dbt_ids, np.argwhere(dbt_ids == eq_dbt[1]))
-            sgt_ids[sgt_ids > eq_dbt[1]] -= 1
-            dbt_ids[dbt_ids > eq_dbt[1]] -= 1
-
-            dbt_cl_map.pop(eq_dbt[1])
-            dbt_cl_map, _ = update_dbt_map(dbt_cl_map, eq_dbt[0], eq_dbt[1])
-
-            profiles[eq_dbt[0]] = np.nanmean(gt[clusters == eq_dbt[0]], axis=0)
-
-        # Update profile
-        profiles[cl1] = np.nanmean(gt[clusters == cl1], axis=0)
-
-    # Rename clusters to range from 0 to n
-    cl_map = {j: str(i) for i, j in enumerate(sgt_ids)}
-    for i, j in dbt_cl_map.items():
-        cl1, cl2 = map(int, j.split('+'))
-        cl_map[i] = '+'.join(sorted([cl_map[int(cl1)], cl_map[int(cl2)]]))
-
-    clusters_str = clusters.astype('<U3')
-    for i, j in enumerate(clusters):
-        clusters_str[i] = cl_map[j]
-
-    # Print cluster summaries to stdout
-    for cl_id, cl_size in zip(*np.unique(clusters, return_counts=True)):
-        cl_name = cl_map[cl_id]
-        if '+' in cl_name:
-            cl1, cl2 = cl_name.split('+')
-            cl_color = f'{COLORS_STR[int(cl1)]}+{COLORS_STR[int(cl2)]}'
-        else:
-            cl_color = COLORS_STR[int(cl_name)]
-        print(f'Cluster {cl_name} ({cl_color}): {cl_size: >4} cells ' \
-            f'({cl_size / df.shape[1] * 100: >2.0f}%)')
-
-        gt_cl_called = np.isfinite(gt[clusters == cl_id]).sum(axis=0)
-        for geno in [0, 1, 2]:
-            gt_cl = gt[clusters == cl_id] == geno
-            print(f'\tGT {geno} - Avg./cell {gt_cl.sum(axis=1).mean(): >4.1f}, '
-                f'# 95% clonal: {(gt_cl.sum(axis=0) > gt_cl_called * 0.95).sum()}')
-
-    pat_map = {}
-    # Snythetic multiplexed data: ground truth known
-    if np.unique(true_cl).size > 1:
-        for cl_id in np.unique(clusters):
-            true_pats = true_cl[np.argwhere(clusters == cl_id).flatten()]
-            pats, cnts = np.unique(true_pats, return_counts=True)
-
-            sugg_pat = pats[np.argmax(cnts)]
-            if sugg_pat not in pat_map.values() or pats.size == 1:
-                pat_map[cl_id] = sugg_pat
-            else:
-                sugg_frac = np.max(cnts) / cnts.sum()
-                old_cl = [i for i,j  in pat_map.items() if j == sugg_pat][0]
-                old_pats, old_cnts = np.unique(
-                    true_cl[np.argwhere(clusters == old_cl).flatten()],
-                    return_counts=True)
-                old_frac = np.max(old_cnts) / old_cnts.sum()
-                if old_frac >= sugg_frac:
-                    pat_map[cl_id] = pats[np.argsort(cnts)[-2]]
+        # Get row color colors based on assignment
+        def get_row_cols(assignment):
+            row_colors1 = []
+            row_colors2 = []
+            for i in assignment:
+                if '+' in i:
+                    s1, s2 = [int(j) for j in i.split('+')]
+                    if s1 > s2:
+                        row_colors1.append(COLORS[s2])
+                        row_colors2.append(COLORS[s1])
+                    else:
+                        row_colors1.append(COLORS[s1])
+                        row_colors2.append(COLORS[s2])
                 else:
-                    pat_map[old_cl] = old_pats[np.argsort(old_cnts)[-2]]
-                    pat_map[cl_id] = sugg_pat
+                    row_colors1.append(COLORS[int(i)])
+                    row_colors2.append('#FFFFFF')
+            return row_colors1, row_colors2
 
-    if np.unique(true_cl).size > 1: # works only for snythetic multiplexed data
-        res_cell = {}
-        if args.clusters == 2:
-            pat_strs = ['0', '1', '0+1']
-        elif args.clusters == 3:
-            pat_strs = ['0', '1', '2', '0+1', '0+2', '1+2']
-        elif args.clusters == 4:
-            pat_strs = ['0', '1', '2', '3',
-                '0+1', '0+2', '0+3', '1+2', '1+3', '2+3']
-        else:
-            raise RuntimeError('Not implemented for >3 clusters')
-        counts = {f'{i}->{j}': 0 for i in pat_strs for j in pat_strs}
-
-        for cell_id, cl_id in enumerate(clusters):
-            cell_true = true_cl[cell_id]
-
-            if cl_id in dbt_ids:
-                cl_dist = np.apply_along_axis(dist_nan, 1, profiles[sgt_ids],
-                    profiles[cl_id])
-                dbt_cl = sgt_ids[np.argsort(cl_dist)[:2]]
-                pred_cl = sorted([pat_map[dbt_cl[0]], pat_map[dbt_cl[1]]])
-                pred = f'{pred_cl[0]}+{pred_cl[1]}'
-            else:
-                pred = pat_map[cl_id]
-            try:
-                counts[f'{cell_true}->{pred}'] += 1
-            except KeyError:
-                counts[f'{cell_true}->{pred}'] = 1
-        res_cell['Euclidean'] = counts
-
-        res_cell_df = pd.DataFrame(res_cell)
-        res_cell_df.index.name = 'Assignment'
-        res_cell_df.columns.name = 'Distance'
-    else:
-        res_cell_df = pd.DataFrame([])
-
-    if cl_no > 1:
-        # Print assignment to tsv file
-        cell_str = '\t'.join([i for i in df.columns.values])
-        cl_str = '\t'.join([i for i in clusters_str])
-        with open(f'{in_file}.assignments.tsv', 'w') as f:
-            f.write(f'Barcode\t{cell_str}\nCluster\t{cl_str}')
-
-        # Safe SNV profiles to identy patients
-        idx = [f'{cl_map[i]} ({COLORS_STR[int(cl_map[i])]})' for i in sgt_ids]
-        pd.DataFrame(profiles[sgt_ids], index=idx, columns=labels).round(2) \
-            .to_csv(f'{in_file}.profiles.tsv', sep='\t')
-
-    if args.output_plot or args.show_plot:
-        if args.output_plot:
-            out_file = f'{in_file}.heatmap.{FILE_EXT}'
-        else:
-            out_file = None
-        snv_order, cell_order = plot_heatmap(gt, Z, true_cl, clusters_str,
-            labels, out_file)
-
-        avg_idx = []
-        for cl_id in np.unique(clusters):
-            avg_idx.append(
-                (cl_id,
-                np.argwhere(clusters_str[cell_order] == cl_map[cl_id]).mean())
-            )
-        row_order = [i[0] for i in sorted(avg_idx, key=lambda x: x[1])]
-        if WL_IDS:
-            profile_gt = profiles.round()[row_order][:,WL_IDS][:,snv_order]
-        else:
-            profile_gt = profiles.round()[row_order][:,snv_order]
-        plot_heatmap(profile_gt, None, np.zeros(cl_no),
-            [cl_map[i] for i in row_order], labels[snv_order],
-            f'{in_file}.heatmap.profiles.{FILE_EXT}', cluster=False)
-
-    return res_cell_df
-
-
-def get_row_cols(assignment):
-    row_colors1 = []
-    row_colors2 = []
-    for i in assignment:
-        if '+' in i:
-            s1, s2 = [int(j) for j in i.split('+')]
-            if s1 > s2:
-                row_colors1.append(COLORS[s2])
-                row_colors2.append(COLORS[s1])
-            else:
-                row_colors1.append(COLORS[s1])
-                row_colors2.append(COLORS[s2])
-        else:
-            row_colors1.append(COLORS[int(i)])
-            row_colors2.append('#FFFFFF')
-    return row_colors1, row_colors2
-
-
-def plot_heatmap(gt, Z, true_cl, clusters_str, labels, out_file, cluster=True):
-    myColors = ('#EAEAEA', '#fed976', '#fc4e2a', '#800026')
-    cmap = LinearSegmentedColormap.from_list('Custom', myColors, len(myColors))
-
-    cl_no = np.unique(clusters_str).size
-    # Get row color colors based on assignment
-    if cl_no > 1:
         r_colors = []
-        if np.unique(true_cl).size > 1:
-            r_colors.extend(get_row_cols(true_cl))
-        r_colors.extend(get_row_cols(clusters_str))
-    else:
-        r_colors = None
+        if np.unique(self.true_cl).size > 1:
+            r_colors.extend(get_row_cols(self.true_cl))
 
-    if WL_IDS and gt.shape[1] != len(WL_IDS):
-        df_plot = np.nan_to_num(gt[:, WL_IDS], nan=-1)
-        labels_plot = labels[WL_IDS]
-    else:
-        df_plot = np.nan_to_num(gt, nan=-1)
-        labels_plot = labels
+        _, assignment_str = self.get_cl_map()
+        r_colors.extend(get_row_cols(assignment_str))
 
-    cm = clustermap(
-        df_plot,
-        row_linkage=Z,
-        row_cluster=cluster,
-        col_cluster=cluster,
-        vmin=-1, vmax=2,
-        row_colors=r_colors,
-        cmap=cmap,
-        figsize=(25, 10),
-        xticklabels=labels_plot,
-        cbar_kws={'shrink': 0.5, 'drawedges': True}
-    )
-    cm.ax_heatmap.set_ylabel('Cells')
-    if df_plot.shape[0] > 50:
-        cm.ax_heatmap.set_yticks([])
-    cm.ax_heatmap.set_xlabel('SNVs')
+        df_plot, mask = self.get_hm_data()
 
-    cm.ax_heatmap.set_xticklabels(cm.ax_heatmap.get_xticklabels(),
-        rotation=45, fontsize=5, ha='right', va='top')
-
-    cm.ax_col_dendrogram.set_visible(False)
-
-    colorbar = cm.ax_heatmap.collections[0].colorbar
-    colorbar.set_ticks([-0.65, 0.15, 0.85, 1.65])
-    colorbar.set_ticklabels([r' $-$', '0|0', '0|1', '1|1'])
-
-    cm.fig.tight_layout()
-    if out_file:
-        print(f'Saving heatmap to: {out_file}')
-        cm.fig.savefig(out_file, dpi=DPI)
-    else:
-        plt.show()
-
-    if cluster:
-        return cm.dendrogram_col.reordered_ind, cm.dendrogram_row.reordered_ind
-
-
-def update_whitelist(wl_file):
-    df = pd.read_csv(wl_file, sep='\t')
-
-    if df.size == 0:
-        if df.shape[1] > 1:
-            for snv in df.columns:
-                WHITELIST.append('_'.join(snv.split('_')[:2]))
+        if self.Z.size > 0:
+            Z = self.Z
         else:
-            for snv in df.columns.values[0].split(';'):
-                WHITELIST.append('_'.join(snv.split('_')[:2]))
-    elif df.shape[1] == 1:
-        df = pd.read_csv(wl_file, sep=',')
-        ids = df['CHR'].astype(str) + '_' + df['POS'].astype(str)
-        WHITELIST.extend(ids)
-    else:
-        for _, (sample, snvs) in df.iterrows():
-            if '+' in sample:
+            Z = None
+
+        if rel_SNPs_only:
+            df_plot = df_plot[:, self.rel_SNPs]
+            mask = mask[:, self.rel_SNPs]
+            x_ticks = self.SNPs[self.rel_SNPs]
+        else:
+            x_ticks = self.SNPs
+
+        cm = clustermap(
+            df_plot,
+            row_linkage=self.Z,
+            row_cluster=cluster,
+            col_cluster=False,
+            mask=mask,
+            row_colors=r_colors,
+            cmap=cmap,
+            figsize=(25, 10),
+            xticklabels=x_ticks,
+            **self.get_cm_specifics()
+        )
+
+        cm.ax_row_colors.set_xlabel('Clusters', rotation=45, fontsize=10,
+            ha='right', va='top')
+
+        cm.ax_heatmap.set_facecolor('#5B566C')
+        cm.ax_heatmap.set_ylabel('Cells')
+        if df_plot.shape[0] > 50:
+            cm.ax_heatmap.set_yticks([])
+        cm.ax_heatmap.set_xlabel('SNPs')
+
+        cm.ax_heatmap.set_xticklabels(cm.ax_heatmap.get_xticklabels(),
+            rotation=45, fontsize=5, ha='right', va='top')
+
+        cm.ax_col_dendrogram.set_visible(False)
+        self.apply_cm_specifics(cm)
+
+        cm.fig.tight_layout()
+        if out_file:
+            print(f'Saving heatmap to: {out_file}')
+            cm.fig.savefig(out_file, dpi=DPI)
+        else:
+            plt.show()
+
+
+    # -------------------------- GENERATE OUTPUT -------------------------------
+
+    def safe_results(self, output):
+        self.print_summary()
+        self.safe_profiles(output)
+        # Print assignment to tsv file
+        _, assignment_str = self.get_cl_map()
+        cell_str = '\t'.join([i for i in self.cells])
+        cl_str = '\t'.join([i for i in assignment_str])
+        order_str = '\t'.join([str(i) for i in leaves_list(self.Z)])
+        with open(f'{output}.assignments.tsv', 'w') as f:
+            f.write(f'Barcode\t{cell_str}\nCluster\t{cl_str}\nOrder\t{order_str}')
+
+
+    def safe_profiles(self, output):
+        pass
+
+
+
+    def print_summary(self):
+        pass
+
+
+# ------------------------------------------------------------------------------
+
+
+class demoTape_reads(demoTape):
+    def __init__(self, in_file, cl_no):
+        super().__init__(in_file, cl_no)
+        self.prof_len = self.SNPs.size * 3
+        self.rel_SNPs = self.get_relevant_SNPS()
+
+
+    def __str__(self):
+        return str(super()) + f'Distance metric: reads'
+
+
+    def get_relevant_SNPS(self):
+        # Identify SNPs that are symmetric/normal distributed: likely germline + ADO
+        # Not informative for clustering
+        VAF_z = np.nan_to_num(self.VAF - np.nanmean(self.VAF, axis=0), 0)
+        q_vals_z = [kstest(VAF_z[:,i], -1 * VAF_z[:,i]).pvalue * self.SNPs.size \
+            for i in range(self.SNPs.size)]
+        rel_SNPs = np.array([i < 0.05 for i in q_vals_z])
+
+        # Identify SNPs that are on the same read in most/all cells and remove 
+        #   one of them from clustering
+        for chrom, chrom_SNPs in self.SNPs[rel_SNPs].groupby('CHR'):
+            if chrom_SNPs.size < 2:
                 continue
-            for snv in snvs.split(';'):
-                WHITELIST.append('_'.join(snv.split('_')[:2]))
+            pos = chrom_SNPs.index.get_level_values('POS').values
+            # SNPs at position id[x] and [x - 1] are on the same read
+            same_read_SNP = np.argwhere((pos[1:] - pos[:-1]) < 275).ravel() + 1
+            if same_read_SNP.size == 0:
+                continue
+
+            for SNP2_chrom_id in same_read_SNP:
+                # Get row index in full data
+                SNP1 = self.SNPs.index.get_loc(chrom_SNPs.index[SNP2_chrom_id - 1])
+                SNP2 = self.SNPs.index.get_loc(chrom_SNPs.index[SNP2_chrom_id])
+                
+                # Calculate euclidean distance between VAF profiles
+                valid = ~np.isnan(self.VAF[:,SNP1]) & ~np.isnan(self.VAF[:,SNP2])
+                VAF_dist = euclidean(self.VAF[:,SNP1][valid], self.VAF[:,SNP2][valid]) \
+                    / np.sqrt(np.sum(2**2 * valid.sum()))
+                # If VAF profiles are very similar: remove second SNP
+                if VAF_dist < 0.05:
+                    rel_SNPs[SNP2] = False
+
+        return rel_SNPs
+
+
+    def get_data(self, df):
+        self.ref = df.applymap(lambda x: int(x.split(':')[0])).values.T
+        self.alt = df.applymap(lambda x: int(x.split(':')[1])).values.T
+        self.dp = self.ref + self.alt
+        VAF = (self.alt + EPSILON) / (self.dp + EPSILON)
+        self.VAF = np.clip(np.where(self.dp > 0, VAF, np.nan), EPSILON,
+            1 - EPSILON)
+        self.RAF = 1 - self.VAF
+        self.norm_const = np.insert(
+            np.arange(1, self.dp.max() * 2 + 1) \
+                * np.log(np.arange(1, self.dp.max() * 2 + 1)),
+            0, np.nan)
+        self.reads = np.hstack([self.ref, self.alt, self.dp])
+
+
+    def metric(self, c1, c2):
+        r1 = np.reshape(c1, (3, -1))[:, self.rel_SNPs]
+        r2 = np.reshape(c2, (3, -1))[:, self.rel_SNPs]
+
+        valid = (r1[2] > 0) & (r2[2] > 0)
+        r1 = r1[:,valid]
+        r2 = r2[:,valid]
+
+        p1 = np.clip(r1[0] / r1[2], EPSILON, 1 - EPSILON)
+        p2 = np.clip(r2[0] / r2[2], EPSILON, 1 - EPSILON)
+        dp_total = r1[2] + r2[2]
+        p12 = np.clip((r1[0] + r2[0]) / (dp_total), EPSILON, 1 - EPSILON)
+        p12_inv = 1 - p12
+
+        logl = r1[0] * np.log(p1 / p12) + r1[1] * np.log((1 - p1) / p12_inv) \
+            + r2[0] * np.log(p2 / p12) + r2[1] * np.log((1 - p2) / p12_inv)
+
+        norm = np.log(dp_total) * (dp_total) \
+            - r1[2] * np.log(r1[2]) - r2[2] * np.log(r2[2])
+
+        return np.sum(logl / norm) / valid.sum()
+
+
+    def get_pairwise_dists(self):
+        dist = []
+        for i in np.arange(self.cells.size - 1):
+            valid = (self.dp[i, self.rel_SNPs] > 0) & (self.dp[i+1:, self.rel_SNPs] > 0)
+            dp_total = self.dp[i, self.rel_SNPs] + self.dp[i+1:, self.rel_SNPs]
+            p12 = np.clip(
+                (self.alt[i, self.rel_SNPs] + self.alt[i+1:, self.rel_SNPs] \
+                    + EPSILON) / (dp_total + EPSILON),
+                EPSILON, 1 - EPSILON)
+            p12_inv = 1 - p12
+
+            logl = self.alt[i, self.rel_SNPs] * np.log(self.VAF[i, self.rel_SNPs] / p12) \
+                + self.ref[i, self.rel_SNPs] * np.log(self.RAF[i, self.rel_SNPs] / p12_inv) \
+                + self.alt[i+1:, self.rel_SNPs] * np.log(self.VAF[i+1:, self.rel_SNPs] / p12) \
+                + self.ref[i+1:, self.rel_SNPs] * np.log(self.RAF[i+1:, self.rel_SNPs] / p12_inv)
+
+            norm = self.norm_const[dp_total] \
+                - self.norm_const[self.dp[i, self.rel_SNPs]] - self.norm_const[self.dp[i+1:, self.rel_SNPs]]
+
+            dist.append(np.nansum(logl / norm, axis=1) / valid.sum(axis=1))
+        return np.concatenate(dist)
+
+
+    def get_profile(self, cl):
+        cells = np.isin(self.assignment, cl)
+        # p = self.alt[cells].sum(axis=0) / self.dp[cells].sum(axis=0)
+        p = np.average(np.nan_to_num(self.VAF[cells]), weights=self.dp[cells],
+            axis=0)
+        dp = np.mean(self.dp[cells], axis=0).round()
+        alt = (dp * p).round()
+        ref = dp - alt
+        return np.hstack([alt, ref, dp])
+
+
+    def check_hom_match(self, scl, dcl):
+        rs =  np.reshape(self.profiles[scl], (3, -1))
+        rd1 = np.reshape(self.profiles[dcl[0]], (3, -1))
+        rd2 = np.reshape(self.profiles[dcl[1]], (3, -1))
+
+        valid = (rs[2] > 0) & (rd1[2] > 0) & (rd2[2] > 0)
+        rs = rs[:,valid]
+        rd1 = rd1[:,valid]
+        rd2 = rd2[:,valid]
+
+        ps = rs[0] / rs[2]
+        pd1 = rd1[0] / rd1[2]
+        pd2 = rd2[0] / rd2[2]
+
+        cutoff = 0.05
+        hom_scl = np.argwhere(ps > 1 - cutoff**2).flatten()
+        wt_scl = np.argwhere(ps <= cutoff**2).flatten()
+        hom_dcl1 = set(np.argwhere(pd1 > (1 - cutoff)).flatten())
+        hom_dcl2 = set(np.argwhere(pd2 > (1 - cutoff)).flatten())
+
+        hom12_id = np.array(list(hom_dcl1 & hom_dcl2))
+        hom1_id = np.array(list(hom_dcl1 - hom_dcl2))
+        hom2_id = np.array(list(hom_dcl2 - hom_dcl1))
+
+        # Check if hom in singlet match
+        if hom_scl.size > 0:
+            hom_s = (pd1[hom_scl] > (1 - cutoff)) & (pd2[hom_scl] > (1 - cutoff))
+        else:
+            hom_s = np.array([], dtype=bool)
+        # Check if WT in singlet match
+        if wt_scl.size > 0:
+            wt_s = (pd1[wt_scl] <= cutoff) & (pd2[wt_scl] <= cutoff)
+        else:
+            wt_s = np.array([], dtype=bool)
+
+        # Check if both hom match
+        if hom12_id.size > 0:
+            hom12 = ps[hom12_id] >= cutoff**2
+        else:
+            hom12 = np.array([], dtype=bool)
+        # Check if hom on cl1 match
+        if hom1_id.size > 0:
+            hom1 = (ps[hom1_id] > cutoff**2) & (ps[hom1_id] < 1 - cutoff**2)
+        else:
+            hom1 = np.array([], dtype=bool)
+        # Check if hom on cl2 match
+        if hom2_id.size > 0:
+            hom2 = (ps[hom2_id] > cutoff**2) & (ps[hom2_id] < 1 - cutoff**2)
+        else:
+            hom2 = np.array([], dtype=bool)
+
+        hom_match = np.concatenate([hom_s, wt_s, hom12, hom1, hom2])
+
+        return (~hom_match).sum()
+
+
+    @staticmethod
+    def get_cmap():
+        cmap = LinearSegmentedColormap.from_list('my_gradient', (
+            (0.000, (1.000, 1.000, 1.000)),
+            (0.500, (1.000, 0.616, 0.000)),
+            (1.000, (1.000, 0.000, 0.000)))
+        )
+        return cmap
+
+
+    def get_hm_data(self):
+        df =  np.nan_to_num(self.VAF, nan=-1)
+        mask = np.zeros(self.VAF.shape, dtype=bool)
+        mask[self.dp == 0] = True
+        return df, mask
+
+
+    @staticmethod
+    def get_cm_specifics():
+        return {'vmin': 0, 'vmax': 1,
+            'cbar_kws': {'ticks': [0, 1], 'label': 'VAF'}}
+
+
+    @staticmethod
+    def apply_cm_specifics(cm):
+        pass
+
+
+    def safe_profiles(self, output):
+        # Safe SNV profiles to identy patients
+        cl_map, _ = self.get_cl_map()
+        VAF_df = self.get_VAF_profile(self.sgt_ids)
+        VAF_df.index = [f'{cl_map[i]} ({COLORS_STR[int(cl_map[i])]})' \
+            for i in self.sgt_ids]
+        VAF_df.round(2).to_csv(f'{output}.profiles.tsv', sep='\t')
+
+
+    def get_VAF_profile(self, cl):
+        reads_all = np.reshape(self.profiles[cl], (cl.size, 3, self.SNPs.size))
+        VAF_raw = []
+        for reads_cl in reads_all:
+            VAF_raw.append(reads_cl[0] / reads_cl[2])
+        return pd.DataFrame(VAF_raw, index=cl, columns=self.SNPs)
+
+
+    def print_summary(self):
+        cl_map, _ = self.get_cl_map()
+        GTs = {'WT': (0, 0.35), 'HET': (0.35, 0.95), 'HOM': (0.95, 1)}
+        for cl_id, cl_size in zip(*np.unique(self.assignment, return_counts=True)):
+            cl_name = cl_map[cl_id]
+            if '+' in cl_name:
+                cl1, cl2 = map(int, cl_name.split('+'))
+                cl_color = f'{COLORS_STR[cl1]}+{COLORS_STR[cl2]}'
+            else:
+                cl_color = COLORS_STR[int(cl_name)]
+            print(f'Cluster {cl_name} ({cl_color}): {cl_size: >4} cells ' \
+                f'({cl_size / self.cells.size * 100: >2.0f}%)')
+
+            VAF_cl = self.VAF[self.assignment == cl_id]
+            VAF_cl_called = (VAF_cl >= EPSILON).sum(axis=0)
+            for geno, (geno_min, geno_max) in GTs.items():
+                VAF_cl_geno = (VAF_cl >= geno_min) & (VAF_cl < geno_max)
+                avg = VAF_cl_geno.sum(axis=1).mean()
+                clonal = (VAF_cl_geno.sum(axis=0) > VAF_cl_called * 0.95).sum()
+                print(f'\tGT: {geno} - Avg./cell {avg: >4.1f}, # 95% clonal: {clonal}')
+
+
+
+
+# ------------------------------------------------------------------------------
+
+
+class demoTape_gt(demoTape):
+    def __init__(self, in_file, cl_no, distance='manhatten'):
+        super().__init__(in_file, cl_no)
+        self.prof_len = self.SNPs.size
+        self.distance = distance
+        if self.distance == 'manhatten':
+            self.metric = self.dist_L1
+        else:
+            self.metric = self.dist_L2
+
+
+    def __str__(self):
+        return str(super()) + f'Distance metric: {self.distance}'
+
+
+    def get_data(self, df):
+        # Get genotype data
+        self.gt = df.applymap(lambda x: float(x.split(':')[2])).values.T
+        self.gt[self.gt == 3] = np.nan
+
+
+    @staticmethod
+    def dist_L2(c1, c2):
+        valid = ~np.isnan(c1) & ~np.isnan(c2)
+        return euclidean(c1[valid], c2[valid]) / np.sqrt(np.sum(2**2 * valid.sum()))
+
+
+    @staticmethod
+    def dist_L1(c1, c2):
+        valid = ~np.isnan(c1) & ~np.isnan(c2)
+        return cityblock(c1[valid], c2[valid]) / (2 * valid.sum())
+
+
+    def get_pairwise_dists(self):
+        dist = []
+        for i in np.arange(self.cells.size - 1):
+            valid = np.isfinite(self.gt[i]) & np.isfinite(self.gt[i+1:])
+            manh = np.nansum(np.abs(self.gt[i] - self.gt[i+1:]), axis=1)
+            norm = 2 * valid.sum(axis=1)
+            dist.append(manh / norm)
+        return np.concatenate(dist)
+
+
+    def get_profile(self, cl):
+        cells = np.isin(self.assignment, cl)
+        return np.nanmean(self.gt[cells], axis=0)
+
+
+    def check_hom_match(self, scl, dcl):
+        hom_scl = np.argwhere(self.profiles[scl] > 1.5).flatten()
+        wt_scl = np.argwhere(self.profiles[scl] <= 0.5).flatten()
+        hom_dcl1 = set(np.argwhere(self.profiles[dcl[0]] > 1.5).flatten())
+        hom_dcl2 = set(np.argwhere(self.profiles[dcl[1]] > 1.5).flatten())
+
+        hom12_id = np.array(list(hom_dcl1 & hom_dcl2))
+        hom1_id = np.array(list(hom_dcl1 - hom_dcl2))
+        hom2_id = np.array(list(hom_dcl2 - hom_dcl1))
+
+        # Check if hom in singlet match
+        if hom_scl.size > 0:
+            hom_s = (self.profiles[dcl[0]][hom_scl] > 1.5) \
+                & (self.profiles[dcl[1]][hom_scl] > 1.5)
+        else:
+            hom_s = np.array([], dtype=bool)
+        # Check if WT in singlet match
+        if wt_scl.size > 0:
+            wt_s =  (self.profiles[dcl[0]][wt_scl] <= 1.5) \
+                & (self.profiles[dcl[1]][wt_scl] <= 1.5)
+        else:
+            wt_s = np.array([], dtype=bool)
+        # Check if both hom match
+        if hom12_id.size > 0:
+            hom12 = self.profiles[scl][hom12_id] > 1.5
+        else:
+            hom12 = np.array([], dtype=bool)
+        # Check if hom on cl1 match
+        if hom1_id.size > 0:
+            hom1 = (self.profiles[scl][hom1_id] >= 0.5) \
+                & (self.profiles[scl][hom1_id] < 1.5)
+        else:
+            hom1 = np.array([], dtype=bool)
+        # Check if hom on cl2 match
+        if hom2_id.size > 0:
+            hom2 = (self.profiles[scl][hom2_id] >= 0.5) \
+                & (self.profiles[scl][hom2_id] < 1.5)
+        else:
+            hom2 = np.array([], dtype=bool)
+
+        hom_match = np.concatenate([hom_s, wt_s, hom12, hom1, hom2])
+
+        return (~hom_match).sum()
+
+
+    @staticmethod
+    def get_cmap():
+        myColors = ('#5B566C', '#fed976', '#fc4e2a', '#800026')
+        return LinearSegmentedColormap.from_list('Custom', myColors, len(myColors))
+
+
+    def get_hm_data(self):
+        df = np.nan_to_num(self.gt, nan=-1)
+        mask = np.zeros(self.gt.shape, dtype=bool)
+        mask[np.isnan(self.gt)] = True
+        return df, mask
+
+
+    @staticmethod
+    def get_cm_specifics():
+        return {'vmin': -1, 'vmax': 2,
+            'cbar_kws': {'ticks': [-0.65, 0.15, 0.85, 1.65], 'shrink': 0.5,
+                'drawedges': True}}
+
+
+    @staticmethod
+    def apply_cm_specifics(cm):
+        colorbar = cm.ax_heatmap.collections[0].colorbar
+        colorbar.set_ticklabels([r' $-$', '0|0', '0|1', '1|1'])
+
+
+    def safe_profiles(self, output):
+        # Safe SNV profiles to identy patients
+        cl_map, _ = self.get_cl_map()
+        idx = [f'{cl_map[i]} ({COLORS_STR[int(cl_map[i])]})' for i in self.sgt_ids]
+        pd.DataFrame(self.profiles[self.sgt_ids], index=idx, columns=self.SNPs) \
+            .round(2) \
+            .to_csv(f'{output}.profiles.tsv', sep='\t')
+
+
+
+    def print_summary(self):
+        cl_map, assignment_str = self.get_cl_map()
+        # Print cluster summaries to stdout
+        for cl_id, cl_size in zip(*np.unique(self.assignment, return_counts=True)):
+            cl_name = cl_map[cl_id]
+            if '+' in cl_name:
+                cl1, cl2 = map(int, cl_name.split('+'))
+                cl_color = f'{COLORS_STR[cl1]}+{COLORS_STR[cl2]}'
+            else:
+                cl_color = COLORS_STR[int(cl_name)]
+            print(f'Cluster {cl_name} ({cl_color}): {cl_size: >4} cells ' \
+                f'({cl_size / self.cells.size * 100: >2.0f}%)')
+
+            gt_cl = self.gt[self.assignment == cl_id]
+            gt_cl_called = np.isfinite(gt_cl).sum(axis=0)
+            for geno in [0, 1, 2]:
+                gt_cl_geno = gt_cl == geno
+                print(f'\tGT: {geno} - ' \
+                    f'Avg./cell {gt_cl_geno.sum(axis=1).mean(): >4.1f}, '
+                    f'# 95% clonal: {(gt_cl_geno.sum(axis=0) > gt_cl_called * 0.95).sum()}')
+
+
+# ------------------------------------------------------------------------------
+
+
+def main(args):
+    in_files = []
+    if len(args.input) == 1 and os.path.isdir(args.input[0]):
+        for file in os.listdir(args.input[0]):
+            if file.endswith('_variants.csv'):
+                in_files.append(os.path.join(args.input[0], file))
+    else:
+        in_files = args.input
+
+    for in_file in in_files:
+        if args.metric == 'reads':
+            dt = demoTape_reads(in_file, args.clusters)
+        else:
+            dt = demoTape_gt(in_file, args.clusters, args.metric)
+
+        dt.demultiplex()
+        if args.output:
+            args.output = os.path.splitext(args.output)[0]
+        else:
+            args.output = os.path.splitext(in_file)[0]
+
+        dt.safe_results(args.output)
+        if args.output_plot:
+            dt.plot_heatmap(f'{args.output}.heatmap.{FILE_EXT}')
+        if args.show_plot:
+            dt.plot_heatmap()
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input', type=str, nargs='+',
         help='Input _variants.csv file(s).')
-    parser.add_argument('-n', '--clusters', type=int, default=1,
-        help='Number of clusters to define. Default = 1.')
-    parser.add_argument('-wl', '--whitelist', type=str, default='',
-        help='Whitelist containint SNVs for plotting. Default = None.')
-    parser.add_argument('-nd', '--no_doublets', action='store_true',
-        help='If set, no doublets are assumed.')
+    parser.add_argument('-o', '--output', type=str, default='',
+        help='Output base name: <DIR>/<> .')
+    parser.add_argument('-n', '--clusters', type=int, default=2,
+        help='Number of clusters to define. Default = 2.')
+    parser.add_argument('-m', '--metric', type=str, default='reads',
+        choices=['reads', 'manhatten', 'euclidean'],
+        help='Which data/distance to use for demultiplexing. Default = reads.')
 
-    output = parser.add_argument_group('output')
-    output.add_argument('-op', '--output_plot', action='store_true',
+    plotting = parser.add_argument_group('plotting')
+    plotting.add_argument('-op', '--output_plot', action='store_true',
         help='Output file for heatmap with dendrogram to "<INPUT>.hm.png".')
-    output.add_argument('-sp', '--show_plot', action='store_true',
+    plotting.add_argument('-sp', '--show_plot', action='store_true',
         help='Show heatmap with dendrogram at stdout.')
-    output.add_argument('-os', '--output_summary', type=str,
-        help='Output file for demultiplexing summary (simualted data only).')
 
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     args = parse_args()
-    if args.whitelist:
-        update_whitelist(args.whitelist)
     main(args)

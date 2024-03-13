@@ -4,12 +4,15 @@ import argparse
 import gc
 from itertools import combinations
 import os
+import re
 import shutil
 import tempfile
+
 
 import loompy
 import numpy as np
 import pandas as pd
+
 
 CHR_ORDER = {str(i): i for i in range(1, 23)}
 CHR_ORDER.update({'X':23, 'Y':24})
@@ -26,6 +29,72 @@ VCF_HEADER ='##fileformat=VCFv4.3\n' \
 
 VCF_BODY_ROW = '{chr}\t{pos}\t{chr}:{pos}\t{ref}\t{alt}\t.\tPASS\t.\tGT:DP:AD\t{data}\n'
 
+
+def plot_heatmap(df, SNPs=None, cells=None, out_file=None,
+            cluster=True):
+    COLORS = ['#e41a1c', '#377eb8', '#4daf4a', '#E4761A' , '#2FBF85']
+    from matplotlib import pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+    from seaborn import clustermap
+
+    myColors = ('#EAEAEA', '#fed976', '#fc4e2a', '#800026')
+    cmap = LinearSegmentedColormap.from_list('Custom', myColors, len(myColors))
+
+    if isinstance(cells, (list, pd.Series, np.ndarray)):
+        r_colors = [[], []]
+        for i in cells:
+            if '+' in i:
+                s1, s2 = sorted([int(j[-1]) for j in i.split('+')])
+                r_colors[0].append(COLORS[s1])
+                r_colors[1].append(COLORS[s2])
+            else:
+                r_colors[0].append(COLORS[int(i[-1])])
+                r_colors[1].append('#FFFFFF')
+        y_labels = cells
+    else:
+        r_colors = None
+        y_labels = 'auto'
+
+    if isinstance(SNPs, (list, pd.Series, np.ndarray)):
+        x_labels = SNPs
+    else:
+        x_labels = 'auto'
+
+    df[df == 3] = -1
+    if df.shape[0] < df.shape[1]: # Wrong dimensions: transpose
+        df = df.T
+    cm = clustermap(
+        df,
+        row_cluster=cluster,
+        col_cluster=cluster,
+        vmin=-1, vmax=2,
+        row_colors=r_colors,
+        cmap=cmap,
+        figsize=(25, 10),
+        xticklabels=x_labels,
+        yticklabels=y_labels,
+        cbar_kws={'shrink': 0.5, 'drawedges': True}
+    )
+    cm.ax_heatmap.set_ylabel('Cells')
+    if df.shape[0] > 50:
+        cm.ax_heatmap.set_yticks([])
+    cm.ax_heatmap.set_xlabel('SNPs')
+
+    cm.ax_heatmap.set_xticklabels(cm.ax_heatmap.get_xticklabels(),
+        rotation=45, fontsize=5, ha='right', va='top')
+
+    cm.ax_col_dendrogram.set_visible(False)
+
+    colorbar = cm.ax_heatmap.collections[0].colorbar
+    colorbar.set_ticks([-0.65, 0.15, 0.85, 1.65])
+    colorbar.set_ticklabels([r' $-$', '0|0', '0|1', '1|1'])
+
+    cm.fig.tight_layout()
+    if out_file:
+        print(f'Saving heatmap to: {out_file}')
+        cm.fig.savefig(out_file, dpi=DPI)
+    else:
+        plt.show()
 
 
 def get_assignment_dict(assignment_file):
@@ -61,6 +130,8 @@ def main(args):
         df1['CHR_ORDER'] = df1['CHR'].map(CHR_ORDER)
         df1.sort_values(['CHR_ORDER', 'POS'], inplace=True)
         df1.drop('CHR_ORDER', axis=1, inplace=True)
+        gt1 = gt1[df1.index.values]
+        VAF = VAF[df1.index.values]
         df1.reset_index(drop=True, inplace=True)
 
         df2, gt2 = filter_variants(df1, gt1, VAF, args)
@@ -70,23 +141,94 @@ def main(args):
         else:
             df4, gt4 = df3, gt3
 
+        if len(WHITELIST) != 0:
+            df4, gt4 = filter_variants_WL(df4, gt4, args)
+
+        # Generate regions file if panel with gene name data is provided
+        if args.panel:
+            try:
+                gene_file = [i for i in os.listdir(args.panel) \
+                    if i.endswith('-submitted.bed')][0]
+            except KeyError:
+                raise IOError(f'No <PANEL>-submitted.bed file in {args.panel}')
+                
+            pa_raw = pd.read_csv(os.path.join(args.panel, gene_file),
+                sep='\t', header=None, skiprows=[0])
+            pa_raw[0] = pa_raw[0].str.replace('chr', '')
+            regions = []
+            for gene, reg_df in pa_raw.groupby(3):
+                if not gene.startswith('chr'):
+                    gene = gene.split(':')[0]
+                regions.append(
+                    [reg_df.iloc[0, 0], reg_df[1].min(), reg_df[2].max(), gene])
+            pa = pd.DataFrame(regions, columns=['chr', 'start', 'stop', 'gene'])
+
+            for i, data in df4.iterrows():
+                overlap = pa[(pa['chr'] == data['CHR']) \
+                    & (data['POS'] >= pa['start']) & (data['POS'] <= pa['stop'])]
+                if overlap.size == 0:
+                    continue
+                elif overlap.shape[0] == 1:
+                    df4.loc[i, 'REGION'] = overlap.iloc[0, 3]
+                elif overlap['gene'].unique().size == 1:
+                    df4.loc[i, 'REGION'] = overlap['gene'].unique()[0]
+                elif len([i for i in overlap['gene'].unique() \
+                        if not i.startswith('chr')]) == 1:
+                    df4.loc[i, 'REGION'] = [i for i in overlap['gene'].unique() \
+                        if not i.startswith('chr')][0]
+                else:
+                    import pdb; pdb.set_trace()
+            map_r = {j["gene"]: f'{j["chr"]}_{j["gene"]}' for _, j in pa.iterrows()}
+            for i in df4['REGION']:
+                if i not in map_r:
+                    chrom = df4[df4['NAME'] == i].iloc[0, 0]
+                    map_r[i] = f'{chrom}_{i}'
+
+            DP = df4.iloc[:,7:].applymap(
+                lambda x: sum([i for i in map(int, x.split(':')[:2])]))
+            DP['REGION'] = df4['REGION']
+
+            DP_r = DP.groupby('REGION').sum()
+            DP_r.rename(index=map_r, inplace=True)
+
         if args.output:
             if args.output.endswith('_variants.csv'):
                 variant_file = f'{args.output[:-13]}{cl}_variants.csv'
+                out_file_raw = os.path.splitext(variant_file)
             else:
                 out_file_raw = os.path.splitext(args.output)
                 variant_file = f'{out_file_raw[0]}{cl}{out_file_raw[1]}'
         else:
-            in_file_raw = os.path.splitext(args.input[0])[0]
-            variant_file = f'{in_file_raw}{cl}_variants.csv'
+            variant_file = f'{os.path.splitext(args.input[0])[0]}{cl}_variants.csv'
+            out_file_raw = os.path.splitext(variant_file)
 
         out_dir = os.path.dirname(variant_file)
         if not os.path.exists(out_dir):
             os.makedirs(out_dir)
             print(f'Creating output directory: {out_dir}')
 
+        # Filtering germlines
+        gt = gt4.astype(float)
+        gt[gt == 3] = np.nan
+        germline = np.nanstd(gt == 1, axis=1) < args.minStd
+
+        loci = df4['CHR'] + ':' + df4['POS'].astype(str) + ':' + df4['REF'] \
+            + '/' + df4['ALT']
+
+        gl_file = f'{out_file_raw[0]}{cl}_germlineOrArtifact.csv'
+        print(f'Writing germlines/technical artifacts to: {gl_file}')
+        with open(gl_file, 'w') as f:
+            f.write('\n'.join(loci[germline].values))
+
+        gt4 = gt4[~germline]
+        df4 = df4.iloc[~germline]
+
         print(f'Writing variant file to: {variant_file}')
         df4.to_csv(variant_file, index=False, header=True)
+        if args.panel:
+            region_file = variant_file.replace('_variants.csv', '_regions.csv')
+            print(f'Writing region file to: {region_file}')
+            DP_r.to_csv(region_file, index=True, header=False)
 
         if not args.full_output:
             continue
@@ -95,18 +237,16 @@ def main(args):
         variant_full_file = f'{out_file_raw[0]}_full{out_file_raw[1]}'
         df1.to_csv(variant_full_file, index=False, header=True)
 
-
         save_vcf(df4.copy(deep=True), out_file_raw[0])
 
-        rows = df4['CHR'] + ':' + df4['POS'].astype(str) + ':' + df4['REF'] + '/' + df4['ALT']
-        cols = df4.columns[7:].values
+        cells = df4.columns[7:].values
 
         barcode_file = f'{out_file_raw[0]}_barcodes.csv'
         with open(barcode_file, 'w') as f:
-            f.write('\n'.join(cols))
+            f.write('\n'.join(cells))
 
-        RD = df4.iloc[:,7:].applymap(lambda x: int(x.split(':')[0])).set_index(rows)
-        AD = df4.iloc[:,7:].applymap(lambda x: int(x.split(':')[1])).set_index(rows)
+        RD = df4.iloc[:,7:].applymap(lambda x: int(x.split(':')[0])).set_index(loci)
+        AD = df4.iloc[:,7:].applymap(lambda x: int(x.split(':')[1])).set_index(loci)
         DP = RD + AD
 
         RD_sm_file = f'{out_file_raw[0]}_RD.mtx'
@@ -115,14 +255,14 @@ def main(args):
             for f in [f_r, f_a]:
                 f.write('%%MatrixMarket matrix coordinate real general\n' \
                     '% written by distance-demulti\n'\
-                    f'{rows.size} {cols.size} {gt4.size}\n')
-            for snv in range(rows.size):
-                for cell in range(cols.size):
+                    f'{loci.size} {cells.size} {gt4.size}\n')
+            for snv in range(loci.size):
+                for cell in range(cells.size):
                     f_r.write(f'{snv+1} {cell+1} {RD.iloc[snv, cell]}\n')
                     f_a.write(f'{snv+1} {cell+1} {AD.iloc[snv, cell]}\n')
 
         gt_file = f'{out_file_raw[0]}_gt.csv'
-        pd.DataFrame(gt4, index=rows, columns=cols).to_csv(gt_file)
+        pd.DataFrame(gt4, index=loci, columns=cells).to_csv(gt_file)
 
         DP_file = f'{out_file_raw[0]}_DP.csv'
         DP.T.to_csv(DP_file, index=True, header=True, index_label='cell_id')
@@ -188,7 +328,6 @@ def filter_variants(df, gt, VAF, args):
 
 def filter_variants_consecutive(df, gt, proximity):
     keep = np.ones(df.shape[0], dtype=bool)
-    delete = []
 
     chrom = df['CHR'].values
     pos = df['POS'].values
@@ -210,6 +349,31 @@ def filter_variants_consecutive(df, gt, proximity):
             loc += 1
 
     keep[get_WL_ids(df)] = True
+    return df[keep].reset_index(drop=True), gt[keep]
+
+
+def filter_variants_WL(df, gt, args):
+    keep = np.ones(df.shape[0], dtype=bool)
+    uniq_vars = df[df.duplicated(subset=['CHR', 'POS'])][['CHR', 'POS']]
+
+    for _, (chrom, pos) in uniq_vars.iterrows():
+        var_ids = df[(df['CHR'] == chrom) & (df['POS'] == pos)].index.values
+        freq = ((gt[var_ids] == 1) | (gt[var_ids] == 2)).mean(axis=1)
+        bases = df.loc[var_ids, ['REF', 'ALT']]
+
+        # Both reported ALT have a 0 frequency, display only first one
+        if freq.max() == 0:
+            keep[var_ids[1:]] = False
+        # All or all but one low frequent, only kept cause of whitelist
+        elif freq.max() < args.minMutated or sum(freq >= args.minMutated) == 1:
+            keep[var_ids[freq != freq.max()]] = False
+        # All but one variant have a '*' as REF or ALT
+        elif ((bases == '*').sum(axis=1) == 0).sum() == 1:
+            keep[var_ids[((bases == '*').sum(axis=1) > 0)]] = False
+        else:
+            # Keep everything but variants with '*'
+            keep[var_ids[((bases == '*').sum(axis=1) > 0)]] = False
+            # import pdb; pdb.set_trace()
     return df[keep].reset_index(drop=True), gt[keep]
 
 
@@ -296,8 +460,6 @@ def multiplex_looms(args):
         'No. input files has to be the same as no. ratios. ' \
             f'({no_samples} != {len(args.ratio)})'
     assert np.sum(args.ratio) <= 1, 'Ratios cannot sum up to >1.'
-    assert (args.take_cells_from == None or args.doublets == 0), \
-        'Doublets not allowed if cells taken from previous run'
 
     no_cells = np.zeros(no_samples, dtype=int)
     for i, in_file in enumerate(args.input):
@@ -306,18 +468,6 @@ def multiplex_looms(args):
             shutil.copy2(in_file, temp_in_file)
             with loompy.connect(temp_in_file) as ds:
                 no_cells[i] = ds.col_attrs['barcode'].size
-
-    # Take cell ids from previously generated filtered_variants file
-    old_sample = {}
-    if args.take_cells_from:
-        with open(args.take_cells_from, 'r') as f:
-            cells_sampled = f.readline().strip().split(',')[7:]
-            for i in cells_sampled:
-                cell_id, sample_no = i.split(',pat')
-                try:
-                    old_sample[int(sample_no)]['name'].append(cell_id)
-                except KeyError:
-                    old_sample[int(sample_no)] = {'name': [cell_id]}
 
     # Subsample cells
     samples_total = (no_cells.min() * np.array(args.ratio)).astype(int)
@@ -337,16 +487,6 @@ def multiplex_looms(args):
 
             # Open loom file and read data
             with loompy.connect(temp_in_file) as ds:
-                if old_sample:
-                    cell_names = ds.col_attrs['barcode']
-                    new_idx = []
-                    for j, cell_name in enumerate(cell_names):
-                        if cell_name in old_sample[i]['name']:
-                            new_idx.append(j)
-                    assert len(new_idx) == len(old_sample[i]['name']), \
-                        'Missmatch between barcodes and samples'
-                    samples[i]['idx'] = np.array(new_idx)
-
                 index = concat_str_arrays(
                     [ds.ra['CHROM'], ds.ra['POS'], ds.ra['REF'], ds.ra['ALT']])
                 cols = samples[i]['idx'] + ((i + 1) / 10)
@@ -418,10 +558,10 @@ def multiplex_looms(args):
         new_name = f'{samples[s1]["name"][c1_idx]}+{samples[s2]["name"][c2_idx]}'
 
         dbt_gt[new_id] = np.apply_along_axis(merge_gt, axis=1, arr=df[[c1, c2]])
-        dbt_DP[new_id] = DP[c1] + DP[c2]
         dbt_GQ[new_id] = GQ[[c1,c2]].mean(axis=1)
-        dbt_AD[new_id] = AD[c1] + AD[c2]
-        dbt_RO[new_id] = RO[c1] + RO[c2]
+        dbt_DP[new_id] = (DP[[c1,c2]].mean(axis=1).round()).astype(int)
+        dbt_AD[new_id] = (AD[[c1,c2]].mean(axis=1).round()).astype(int)
+        dbt_RO[new_id] = dbt_DP[new_id] - dbt_AD[new_id]
 
         samples[s1]['idx'] = np.delete(samples[s1]['idx'], c1_idx)
         samples[s1]['name'] = np.delete(samples[s1]['name'], c1_idx)
@@ -532,13 +672,13 @@ def multiplex_looms(args):
     return pd.DataFrame(variants_info), gt, VAF
 
 
+
 def process_loom(args, rel_cells=np.array([])):
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_in_file = os.path.join(temp_dir, os.path.basename(args.input[0]))
         shutil.copy2(args.input[0], temp_in_file)
         with loompy.connect(temp_in_file) as ds:
             gt = ds[:,:]
-
             if rel_cells.size > 0:
                 cell_names = ds.col_attrs['barcode']
                 cells = np.argwhere(np.isin(cell_names, rel_cells)).flatten()
@@ -556,7 +696,7 @@ def process_loom(args, rel_cells=np.array([])):
                 else:
                     cells = np.arange(cell_no)
 
-            gt = gt[:,cells]
+            gt = gt[:, cells]
 
             # Sixth filter: Remove variants mutated in < X % of cells; done first in mosaic
             mut = (gt == 1) | (gt == 2)
@@ -611,7 +751,7 @@ def process_loom(args, rel_cells=np.array([])):
             VAF = VAF[keep_var][:,keep_cells]
 
             ampl = ds.ra['amplicon'][mut_var][keep_var]
-
+            
             variants_info = {
                 'CHR': ds.ra['CHROM'][mut_var][keep_var],
                 'POS': ds.ra['POS'][mut_var][keep_var],
@@ -647,10 +787,18 @@ def update_whitelist(wl_file):
         else:
             for snv in df.columns.values[0].split(';'):
                 WHITELIST.append('_'.join(snv.split('_')[:2]))
+    # Just 1 column: either wrong separator or direct whitelist entries
     elif df.shape[1] == 1:
-        df = pd.read_csv(wl_file, sep=',')
-        ids = df['CHR'].astype(str) + '_' + df['POS'].astype(str)
+        if re.match('[\dXY]{1,2}_\d+', df.columns[0]):
+            with open(wl_file, 'r') as f:
+                ids = f.read().strip().split('\n')
+        else:
+            df = pd.read_csv(wl_file, sep=',')
+            ids = df['CHR'].astype(str) + '_' + df['POS'].astype(str)
         WHITELIST.extend(ids)
+    elif 'chr' in df.columns and 'pos' in df.columns:
+        for _, (chrom, pos) in df.iterrows():
+            WHITELIST.append(f'{chrom.replace("chr", "")}_{pos}')
     else:
         for _, (sample, snvs) in df.iterrows():
             if '+' in sample:
@@ -670,23 +818,30 @@ def parse_args():
         help='Input loom file. If more given, multiplex snythetically.')
     parser.add_argument('-a', '--assignment', type=str, default='',
         help='Assignment of cells to clusters. Create output for each cluster.')
+    parser.add_argument('-pa', '--panel', type=str, default='',
+        help='Path to (panel) Designer folder with XX-submitted.bed and ' \
+        'XX-amplicon.bed file. Required for defining genes as regions.')
     parser.add_argument('-wl', '--whitelist', type=str, default='',
         help='Whitelist containing SNVs for plotting. Default = None.')
     parser.add_argument('-o', '--output', type=str, help='Output file')
     parser.add_argument('-fo', '--full_output', action='store_true',
         help='Generate more output files (AD, RD, DP, full GT).')
 
-    multiplex = parser.add_argument_group('multiplex')
+    multiplex = parser.add_argument_group('multiplex simulations')
     multiplex.add_argument('-r', '--ratio', nargs='+', type=float,
-        help='Multiplex ratio if multiple input files (#arguments == #inputs).')
-    multiplex.add_argument('-tcf', '--take_cells_from', type=str,
-        help='For multiplexing, take them from output file (instead of sampling).')
+        help='Multiplex ratio (#arguments == #inputs).')
     multiplex.add_argument('-d', '--doublets', type=float, default=0,
-        help='Fraction of doublet from different multiplexed samples.')
-    multiplex.add_argument('-c', '--cell_no', type=float, default=np.inf,
-        help='Subsample cells (either total number or fraction).')
+        help='Fraction of doublet. Default = 0.')
+
+    downsample = parser.add_argument_group('downsample simulations')
+    downsample.add_argument('-c', '--cell_no', type=float, default=np.inf,
+        help='Downsample cells (either total number or fraction).' \
+            'Default = None')
 
     mosaic = parser.add_argument_group('mosaic')
+    mosaic.add_argument('-mStd', '--minStd', type=float, default=0.1,
+        help='Minimum StandardDeviation at a loci to consider a variant.' \
+            'If the Std is lower, the loci is considered a germline/artefact')
     mosaic.add_argument('-mGQ', '--minGQ', type=int, default=30,
         help='Minimum GQ to consider a variant (per cell).')
     mosaic.add_argument('-mDP', '--minDP', type=int, default=10,
@@ -702,14 +857,14 @@ def parse_args():
     mosaic.add_argument('-refVAF', '--max_ref_VAF', type=float, default=0.05,
         help='Maximum VAF to consider a wildtype variant (per cell).')
     mosaic.add_argument('-homVAF', '--min_hom_VAF', type=float, default=0.95,
-        help='Minimum VAF to consider a hetrozygous variant (per cell).')
-    mosaic.add_argument('-hetVAF', '--min_het_VAF', type=float, default=0.35,
         help='Minimum VAF to consider a homozygous variant (per cell).')
+    mosaic.add_argument('-hetVAF', '--min_het_VAF', type=float, default=0.35,
+        help='Minimum VAF to consider a heterozygous variant (per cell).')
     mosaic.add_argument('-p', '--proximity', nargs='+', type=int,
         default=[25, 50, 100, 200], help='If "i + 1" variants are within ' \
             '"proximity[i]", then the variants are removed.')
     mosaic.add_argument('-fs', '--filter_same', action='store_true',
-        help='Filter variants all but one variaont on the same amplicon ' \
+        help='Filter all but one variant on the same amplicon ' \
             'if their genotypes are >95%% equal. Default = False')
 
     return parser.parse_args()

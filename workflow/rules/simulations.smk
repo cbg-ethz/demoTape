@@ -60,7 +60,7 @@ else:
                 'rep{n}.filtered_variants.vcf')
         threads: 1
         resources:
-            mem_mb = 16384,
+            mem_mb = 49152,
             runtime = 240,
         params:
             ratios = lambda w: re.search('([-0\.\d]+)-d0\.\d+', f'{w.frac_dir}') \
@@ -103,22 +103,22 @@ rule demultiplexing_demoTape:
         os.path.join(OUT_DIR, '{frac_dir}', 'variants',
             'rep{n}.filtered_variants.csv')
     output:
-        os.path.join(OUT_DIR, '{frac_dir}', 'demultiplexed',
-            'rep{n}.distance_summary.tsv')
+        os.path.join(OUT_DIR, '{frac_dir}', 'demoTape',
+            'rep{n}.demoTape.assignments.tsv')
     threads: 1
     resources:
         mem_mb = 4096,
-        runtime = 180,
+        runtime = 360,
     benchmark:
         os.path.join(OUT_DIR, 'benchmarks', '{frac_dir}.{n}.demoTape.txt')
     params:
-        full_in = lambda w: os.path.join(OUT_DIR, f'{w.frac_dir}', 'variants',
-            f'rep{w.n}.filtered_variants_full.csv'),
+        out_base = lambda w: os.path.join(OUT_DIR, f'{w.frac_dir}', 'demoTape',
+            f'rep{w.n}.demoTape'),
     shell:
         """
         python {SCRIPT_DIR}/demultiplex_distance.py \
             -i {input} \
-            -os {output} \
+            -o {params.out_base} \
             -n {SAMPLES_N}
         """
 
@@ -135,7 +135,7 @@ rule demultiplexing_scSplit:
     threads: 1
     resources:
         mem_mb = 16384,
-        runtime = 90,
+        runtime = 180,
     benchmark:
         os.path.join(OUT_DIR, 'benchmarks', '{frac_dir}.{n}.scSplit.txt')
     params:
@@ -166,7 +166,7 @@ rule demultiplexing_souporcell:
     threads: 4
     resources:
         mem_mb = 8192,
-        runtime = 90,
+        runtime = 120,
     benchmark:
         os.path.join(OUT_DIR, 'benchmarks', '{frac_dir}.{n}.souporcell.txt')
     params:
@@ -225,8 +225,8 @@ rule demultiplexing_vireo:
 def get_demultiplexed_files(frac_dir):
     files = []
     for n in REPEATS:
-        files.append(os.path.join(OUT_DIR, f'{frac_dir}', 'demultiplexed',
-            f'rep{n}.distance_summary.tsv'))
+        files.append(os.path.join(OUT_DIR, f'{frac_dir}', 'demoTape',
+            f'rep{n}.demoTape.assignments.tsv'))
         if config.get('scSplit', {}).get('run', False):
             files.append(os.path.join(OUT_DIR, f'{frac_dir}', 'scSplit',
                 f'rep{n}', 'scSplit_result.csv'))
@@ -252,8 +252,7 @@ rule demultiplexing_summary:
         """
         python {SCRIPT_DIR}/evaluate_simulations.py \
             -i {input} \
-            -o {output} \
-            -op
+            -o {output}
         """
 
 
@@ -291,4 +290,71 @@ rule demultiplexing_merge_summaries:
         python {SCRIPT_DIR}/merge_simulations.py \
             -i {input} \
             -o {output}
+        """
+
+
+rule generate_summary_plot:
+    input:
+        os.path.join(OUT_DIR, 'summary.tsv')
+    output:
+        os.path.join(OUT_DIR, 'summary.png')
+    threads: 1
+    resources:
+        mem_mb = 4096,
+        runtime = 30
+    shell:
+        """
+        python {SCRIPT_DIR}/plot_simulations_summary.py -i {input}
+        """
+
+
+def get_benchmark_files(frac_dir):
+    files = []
+    if not isinstance(config['simulations']['fractions'][0], list):
+        config['simulations']['fractions'] = [config['simulations']['fractions']]
+    if not isinstance(config['simulations']['doublets'], list):
+        config['simulations']['doublets'] = [config['simulations']['doublets']]
+    algs = ['demoTape']
+    for alg_other in ['scSplit', 'souporcell', 'vireo']:
+        if config.get(alg_other, {}).get('run', False):
+            algs.append(alg_other)  
+
+
+    for fracs in config['simulations']['fractions']:
+        for dbt in config['simulations']['doublets']:
+            frac_str = '-'.join([str(i) for i in fracs]) + f'-d{dbt:.2f}'
+            for n in REPEATS:
+                for alg in algs:
+                    files.append(os.path.join(OUT_DIR, 'benchmarks',
+                        f'{frac_str}.{n}.{alg}.txt'))
+    return files
+
+
+rule merge_benchmarks:
+    input:
+        get_benchmark_files
+    output:
+        os.path.join(OUT_DIR, 'benchmark_summary.tsv')
+    threads: 1
+    resources:
+        mem_mb = 4096,
+        runtime = 30
+    shell:
+        """
+        python {SCRIPT_DIR}/merge_simulations_benchmark.py -i {input} -o {output}
+        """
+
+
+rule generate_benchmark_plot:
+    input:
+        os.path.join(OUT_DIR, 'benchmark_summary.tsv')
+    output:
+        os.path.join(OUT_DIR, 'benchmark_summary.png')
+    threads: 1
+    resources:
+        mem_mb = 4096,
+        runtime = 30
+    shell:
+        """
+        python {SCRIPT_DIR}/plot_simulations_benchmark.py -i {input} -o {output}
         """

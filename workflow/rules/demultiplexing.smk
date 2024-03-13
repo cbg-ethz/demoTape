@@ -19,6 +19,8 @@ rule demultiplexing_processing:
         min_het_VAF = config.get('mosaic', {}).get('min_het_VAF', 0.35),
         proximity = ' '.join([str(i) for i in \
             config.get('mosaic', {}).get('proximity', [50, 100, 150, 200])])
+    conda:
+        '../envs/mosaic.yml'
     shell:
         """
         python {SCRIPT_DIR}/mosaic_preprocessing.py \
@@ -42,11 +44,13 @@ rule demultiplexing_demoTape:
     input:
         os.path.join(OUT_DIR, f'{IN_FILE_NAME}_variants.csv')
     output:
-        os.path.join(OUT_DIR, f'{IN_FILE_NAME}_variants.csv.assignments.tsv')
+        os.path.join(OUT_DIR, f'{IN_FILE_NAME}_variants.assignments.tsv')
     threads: 1
     resources:
         mem_mb = 4096,
         runtime = 90,
+    conda:
+        '../envs/sample_assignment.yml'
     shell:
         """
         python {SCRIPT_DIR}/demultiplex_distance.py \
@@ -54,11 +58,84 @@ rule demultiplexing_demoTape:
             -n {SAMPLES} 
         """
 
+rule demultiplexing_reanalyze_whitelist:
+    input:
+        loom = IN_FILE_ABS,
+        assignment = os.path.join(OUT_DIR, f'{IN_FILE_NAME}_variants.assignments.tsv'),
+        whitelist = os.path.join(SNP_DIR, f'{SAMPLE_NAME}.snps.stripped.tsv')
+    output:
+        [temp(os.path.join(OUT_DIR,'temp', f'{IN_FILE_NAME}.{i}_variants.csv')) \
+            for i in range(SAMPLES)],
+    threads: 1
+    resources:
+        mem_mb = 16384,
+        runtime = 240,
+    params:
+        out_file_raw = os.path.join(OUT_DIR, 'temp', f'{IN_FILE_NAME}_variants.csv'),
+        minGQ = config.get('mosaic', {}).get('minGQ', 30),
+        minDP = config.get('mosaic', {}).get('minDP', 10),
+        minVAF = config.get('mosaic', {}).get('minaVAF', 0.2),
+        minVarGeno = config.get('mosaic', {}).get('minVarGeno', 0.5),
+        minCellGeno = config.get('mosaic', {}).get('minCellGeno', 0.5),
+        minMutated = config.get('mosaic', {}).get('minMutated', 50), # Set to 50, instead of 0.01, for smaller datasets!
+        max_ref_VAF = config.get('mosaic', {}).get('max_ref_VAF', 0.05),
+        min_hom_VAF = config.get('mosaic', {}).get('min_hom_VAF', 0.95),
+        min_het_VAF = config.get('mosaic', {}).get('min_het_VAF', 0.35),
+        proximity = ' '.join([str(i) for i in \
+            config.get('mosaic', {}).get('proximity', [50, 100, 150, 200])])
+    conda:
+        '../envs/mosaic.yml'
+    shell:
+        """
+        python {SCRIPT_DIR}/mosaic_preprocessing.py \
+            -i {input.loom} \
+            -a {input.assignment} \
+            -o {params.out_file_raw} \
+            --minGQ {params.minGQ} \
+            --minDP {params.minDP} \
+            --minVAF {params.minVAF} \
+            --minVarGeno {params.minVarGeno} \
+            --minCellGeno {params.minCellGeno} \
+            --minMutated {params.minMutated} \
+            --max_ref_VAF {params.max_ref_VAF} \
+            --min_hom_VAF {params.min_hom_VAF} \
+            --min_het_VAF {params.min_het_VAF} \
+            --proximity {params.proximity} \
+            --full_output \
+            --prepare_cnv_file \
+            --panel_annotation /cluster/work/bewi/members/jgawron/INTeRCePT/tapestri/panels/Myeloid/Myeloid_amplicon_annotation.csv \
+            --whitelist {input.whitelist}
+        """
+
+rule demultiplex_sample_assignment:
+    input:
+        [os.path.join(OUT_DIR,'temp', f'{IN_FILE_NAME}.{i}_variants.csv') \
+            for i in range(SAMPLES)],
+    output:
+        heatmap = os.path.join(OUT_DIR,f'{SAMPLE_NAME}_variants_distance_heatmap.png'),
+        yaml = os.path.join(OUT_DIR,f'{SAMPLE_NAME}.assigment.yaml')
+    threads: 1
+    resources:
+        mem_mb = 4096,
+        runtime = 30,
+    params:
+       RNA_SNP_profile_dir = SNP_DIR,
+       output_base = os.path.join(OUT_DIR,f'{SAMPLE_NAME}_variants_distance.png')
+    conda:
+        '../envs/sample_assignment.yml'
+    shell:
+        """
+        python {SCRIPT_DIR}/assign_cells_via_scRNAseq.py \
+        -i {input} \
+        -p $(ls {params.RNA_SNP_profile_dir}/*.final.vcf) \
+        -o {params.output_base}
+        --assigment-output {output.yaml}
+        """
 
 rule demultiplexing_splitting:
     input:
         loom = IN_FILE_ABS,
-        assignment = os.path.join(OUT_DIR, f'{IN_FILE_NAME}_variants.csv.assignments.tsv')
+        assignment = os.path.join(OUT_DIR, f'{IN_FILE_NAME}_variants.assignments.tsv')
     output:
         [os.path.join(OUT_DIR, f'{IN_FILE_NAME}.{i}_variants.csv') \
             for i in range(SAMPLES)],
@@ -81,6 +158,8 @@ rule demultiplexing_splitting:
         min_het_VAF = config.get('mosaic', {}).get('min_het_VAF', 0.35),
         proximity = ' '.join([str(i) for i in \
             config.get('mosaic', {}).get('proximity', [50, 100, 150, 200])])
+    conda:
+        '../envs/mosaic.yml'
     shell:
         """
         python {SCRIPT_DIR}/mosaic_preprocessing.py \
@@ -97,19 +176,23 @@ rule demultiplexing_splitting:
             --min_hom_VAF {params.min_hom_VAF} \
             --min_het_VAF {params.min_het_VAF} \
             --proximity {params.proximity} \
-            --full_output
+            --full_output \
+            --prepare_cnv_file \
+            --panel_annotation /cluster/work/bewi/members/jgawron/INTeRCePT/tapestri/panels/Myeloid/Myeloid_amplicon_annotation.csv
         """
 
 
 rule run_COMPASS:
     input:
-        os.path.join(OUT_DIR, f'{IN_FILE_NAME}.{{cl}}_variants.csv')
+        variants = os.path.join(OUT_DIR, f'{IN_FILE_NAME}.{{cl}}_variants.csv'),
+        report = os.path.join(INPUT_DIRECTORY,f'{SAMPLE_NAME}.report.json')
     output:
         os.path.join(OUT_DIR, 'COMPASS', 'cl{cl}', 'r{run}.d{dbt}_cellAssignments.tsv')
     threads: 4
     resources:
         mem_mb = 10240,
         runtime = 1440,
+    log: os.path.join(INPUT_DIRECTORY, 'logs', 'r{run}.cl{cl}.d{dbt}_COMPASS.log')
     params:
         in_file_raw = lambda w: os.path.join(OUT_DIR, f'{IN_FILE_NAME}.{w.cl}'),
         out_file_raw = lambda w: os.path.join(
@@ -120,6 +203,7 @@ rule run_COMPASS:
         sex = config['COMPASS'].get('sex', 'female'),
     shell:
         """
+        ( ado=$(jq '.variant_calling.ado_rate' {input.report}); \
         {params.exe} \
             -i {params.in_file_raw} \
             -o {params.out_file_raw} \
@@ -127,7 +211,8 @@ rule run_COMPASS:
             --nchains {threads} \
             --doubletrate {wildcards.dbt} \
             --chainlength {params.chain_length} \
-            --sex {params.sex}
+            --sex {params.sex} \
+            --dropoutrate $ado ) &> {log}
         """
 
 
@@ -220,4 +305,5 @@ rule generate_cooclusterin_matrix:
         out_dir = OUT_DIR
     script:
         f'{SCRIPT_DIR}/plot_cooccurence_matrix.py'
+
 

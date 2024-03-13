@@ -9,8 +9,6 @@ CELL_NO = config['sampling']['cell_no']
 CELL_STR = '-'.join([str(i) for i in CELL_NO])
 DOUBLET_RATE = config['sampling'].get('doublet_rates', [0.08, 0.3])
 
-
-
 ##### Target rules #####
 rule all:
     input:

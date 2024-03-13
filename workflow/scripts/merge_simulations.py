@@ -21,8 +21,7 @@ def main(in_files, out_file):
         except NameError:
             df = df_new
 
-    df.rename({'index': 'algorithm'}, axis=1, inplace=True)
-    df['accuracy'] = df['right'] / (df['right'] + df['wrong'])
+    df = df[['mixing_ratio', 'doublet_rate', 'algorithm', 'rep', 'v_measure']]
 
     if not out_file:
         out_file = os.path.join(os.path.dirname(in_files[0]), 'summary.tsv')

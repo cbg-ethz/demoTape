@@ -4,11 +4,18 @@ import os
 
 SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
 OUT_DIR = config['general']['output-folder']
-IN_FILE_ABS = config['general']['input-loom']
+
+INPUT_DIRECTORY = config['general'].get('input-directory','No directory specified')
+SAMPLE_NAME = config['general'].get('sample-name', 'Sample name not specified')
+if not (INPUT_DIRECTORY == 'No directory specified' or SAMPLE_NAME == 'Sample name not specified'):
+    IN_FILE_ABS = os.path.join(INPUT_DIRECTORY,'dna','results', f'{SAMPLE_NAME}.cells.loom')
+else:
+    IN_FILE_ABS = config['general']['input-loom']
+
 IN_FILE_NAME = os.path.splitext(os.path.basename(IN_FILE_ABS))[0]
 SAMPLES = config['general']['samples']
 RUNS = range(config['algorithms'].get('runs', 10))
-
+SNP_DIR = config.get('SNP_assignment','')
 DOUBLET_RATE = config['algorithms'].get('doublet_rates', [0.08, 0.3])
 
 
@@ -18,7 +25,11 @@ for cl in range(SAMPLES):
     for dbt in DOUBLET_RATE:
         all_files.append(os.path.join(OUT_DIR, f'cl{cl}_coclustering_COMPASS_d{dbt}.png'))
         all_files.append(os.path.join(OUT_DIR, f'cl{cl}_coclustering_SCG_d{dbt}.png'))
+#        all_files.append(os.path.join(OUT_DIR, f'cl{cl}_coclustering_SCG_d{dbt}.png'))
 
+if not SNP_DIR == '':
+    all_files.append(os.path.join(OUT_DIR,f'{SAMPLE_NAME}.assigment.yaml'))
+    all_files.append(os.path.join(OUT_DIR,f'{SAMPLE_NAME}_variants_distance_heatmap.png'))
 
 ##### Target rules #####
 rule all:

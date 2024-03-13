@@ -11,7 +11,7 @@ rule sampling:
     params:
         minGQ = config['COMPASS'].get('minGQ', 30),
         minDP = config['COMPASS'].get('minDP', 10),
-        minVAF = config['COMPASS'].get('minaVAF', 0.2),
+        minVAF = config['COMPASS'].get('minVAF', 0.2),
         minVarGeno = config['COMPASS'].get('minVarGeno', 0.5),
         minCellGeno = config['COMPASS'].get('minCellGeno', 0.5),
         minMutated = lambda w: \
