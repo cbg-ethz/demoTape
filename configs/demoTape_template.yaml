@@ -1,0 +1,38 @@
+analysis:
+  specific:
+    input-dir: <INPUT_DIR>
+    output-dir: <INPUT_DIR>/analysis
+    manual_annotation: <INPUT_DIR>/<PREFIX>_annotated.csv
+    samples: 1
+  general:
+    gene_annotation: <RESOURCES_DIR>/gencode.v19.annotation.cytoBand.tsv
+    panel_annotation: <RESOURCES_DIR>/3848_annotated.bed
+    dbsnp: <RESOURCES_DIR>/hg19/ado_db_files/trim_dbsnp153_0.01.txt
+
+  algorithms:
+    runs: 10
+    doublet_rates: [0.08, 0.3]
+
+    COMPASS:
+      run: True
+      exe: <COMPASS_DIR>/COMPASS
+      chains: 4
+      chain_length: 25000
+
+    BnpC:
+      run: True
+      exe: <BNPC_DIR>/run_BnpC.py
+      chains: 4
+      chain_length: 500
+      runtime: 180
+
+    SCG:
+      run: True
+      wrapper_exe: <MINCEDTAPESTRI_DIR>/sandbox/SCG_wrapper.py
+      chain_length: 2500
+
+output:
+  prefix: <PREFIX>
+
+panel:
+  path: <RESOURCES_DIR>

@@ -1,0 +1,32 @@
+simulations:
+  input-looms: [
+    <INPUT_P1>.cells.loom, 
+    <INPUT_P2>.cells.loom,
+    <INPUT_P3>.cells.loom
+  ]
+  output-folder: <OUTPUT_DIR>
+
+  run_early: False
+  repeats: 30
+  fractions: [
+    [0.33, 0.33, 0.33],
+    [0.2, 0.4, 0.4], [0.4, 0.2, 0.4], [0.4, 0.4, 0.2],
+    [0.2, 0.3, 0.5], [0.3, 0.2, 0.5], [0.5, 0.3, 0.2], [0.5, 0.2, 0.3], [0.2, 0.5, 0.3], [0.3, 0.5, 0.2],
+    [0.1, 0.3, 0.6], [0.3, 0.1, 0.6], [0.6, 0.3, 0.1], [0.6, 0.1, 0.3], [0.1, 0.6, 0.3], [0.3, 0.6, 0.1]]
+  doublets: [0.1, 0.2, 0.3]
+
+  algorithms:
+    demotape:
+      run: True
+
+    scSplit:
+      run: True
+      exe: <SC_SPLIT_DIR>/scSplit
+
+    souporcell:
+      run: True
+      exe: <SOUPORCELL_DIR>/souporcell/target/release/souporcell
+      troublet: <SOUPORCELL_DIR>/troublet/target/release/troublet
+
+    vireo:
+      run: True
