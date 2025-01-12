@@ -1,0 +1,12 @@
+name: analysis
+channels:
+  - conda-forge
+dependencies:
+  - python==3.12.0
+  - graphviz
+  - pip:
+    - loompy
+    - pandas==2.1.4
+    - scipy
+    - seaborn[stats]
+    - scikit-learn

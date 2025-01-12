@@ -66,30 +66,16 @@ def plot_runtime(df, out_file):
 
     fig, ax = plt.subplots(figsize=(12, 12))
     
-    try:
-        bp = sns.boxplot(
-            data=df,
-            x=x_id,
-            order=sorted(COLORS.keys()),
-            y=METRIC,
-            ax=ax,
-            palette=COLORS,
-            fliersize=2,
-            showfliers=False,
-            linewidth=1)
-    except tk.TclError:
-        import matplotlib
-        matplotlib.use('Agg')
-        bp = sns.boxplot(
-            data=df,
-            x=x_id,
-            order=sorted(COLORS.keys()),
-            y=METRIC,
-            ax=ax,
-            palette=COLORS,
-            fliersize=2,
-            showfliers=False,
-            linewidth=1)
+    bp = sns.boxplot(
+        data=df,
+        x=x_id,
+        order=sorted(COLORS.keys()),
+        y=METRIC,
+        ax=ax,
+        palette=COLORS,
+        fliersize=2,
+        showfliers=False,
+        linewidth=5)
 
     sns.stripplot(
         data=df,
@@ -99,10 +85,11 @@ def plot_runtime(df, out_file):
         ax=ax,
         palette=COLORS,
         linewidth=1,
-        jitter=0.15,
-        alpha=.8,
+        jitter=0.25,
+        alpha=.33,
         size=6,
-        dodge=True)
+        #dodge=True
+    )
 
     ax.set_ylim([-5, 200])
     ax.set_ylabel('CPU time [sec]')

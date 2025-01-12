@@ -1,0 +1,9 @@
+name: scg
+dependencies:
+  - pip:
+    - git+https://github.com/Roth-Lab/scg@py3
+    - click
+    - scipy
+    - PyYAML
+    - pandas
+    - h5py

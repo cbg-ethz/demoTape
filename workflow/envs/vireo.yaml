@@ -1,0 +1,6 @@
+name: vireo
+dependencies:
+  - python
+  - pip
+  - pip:
+    - vireoSNP

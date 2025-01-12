@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+
+import os
+import pandas as pd
+
+
+SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
+ENV_DIR = os.path.join(workflow.basedir, 'envs')
+CONDA_PREFIX = config.get('conda_prefix', '')
+# ----- Get sample dependent input files -----
+BASE_DIR = '/home/hw/Desktop/mincedTapestri/results/run_bsse_VAF'
+OUT_DIR = f'{BASE_DIR}/Fig5'
+BASE_DEMULTI = f'{BASE_DIR}/mixed_SID3867_SID5962_SID3841'
+BASE_DEMULTI_CL = f'{BASE_DIR}/mixed_SID3867_SID5962_SID3841/analysis/GFB-4398_GFB-4402'
+SAMPLE_DICT = {
+    'S1': {
+        'single': {
+            'result': f'{BASE_DIR}/SID3841/analysis/GFB-4397_GFB-4401.',
+            'loom': f'{BASE_DIR}/SID3841/SID3841.cells.loom'
+            },
+        'demulti': {
+            'result': f'{BASE_DEMULTI_CL}_1.',
+            'loom': f'{BASE_DEMULTI}/mixed_SID3867_SID5962_SID3841.cells.loom'
+        }
+    },
+    'S2': {
+        'single': {
+            'result': f'{BASE_DIR}/SID3867/analysis/GFB-4395_GFB-4399.',
+            'loom': f'{BASE_DIR}/SID3867/SID3867.cells.loom'
+            },
+        'demulti': {
+            'result': f'{BASE_DEMULTI_CL}_2.',
+            'loom': f'{BASE_DEMULTI}/mixed_SID3867_SID5962_SID3841.cells.loom'
+        }
+    },
+    'S3': {
+        'single': {
+            'result': f'{BASE_DIR}/SID5962/analysis/GFB-4396_GFB-4400.',
+            'loom': f'{BASE_DIR}/SID5962/SID5962.cells.loom'
+            },
+        'demulti': {
+            'result': f'{BASE_DEMULTI_CL}_0.',
+            'loom': f'{BASE_DEMULTI}/mixed_SID3867_SID5962_SID3841.cells.loom'
+        }
+    }
+}
+SAMPLE_CL_MAP = {'0': 'S3', '1': 'S1', '2': 'S2'}
+CL_SAMPLE_MAP = {j:i for i, j in SAMPLE_CL_MAP.items()}
+
+CHR_ORDER = dict({f'{i}': i for i in range(1, 23, 1)}, **{'X': 23, 'Y': 24})
+RELEVANT = True
+if RELEVANT:
+    rel_str = 'relevant.'
+    OUT_DIR += '_relevant'
+else:
+    rel_str = ""
+
+##### Target rules #####
+rule all:
+    input:
+        expand(os.path.join(OUT_DIR, '{sample}.VAF_heatmap_full.png'), 
+            sample=SAMPLE_DICT.keys())
+
+
+wl_input = [
+    SAMPLE_DICT['S1']['single']['result'] + f'{rel_str}filtered_variants.csv',
+    SAMPLE_DICT['S1']['demulti']['result'] + f'{rel_str}filtered_variants.csv',
+    SAMPLE_DICT['S2']['single']['result'] + f'{rel_str}filtered_variants.csv',
+    SAMPLE_DICT['S2']['demulti']['result'] + f'{rel_str}filtered_variants.csv',
+    SAMPLE_DICT['S3']['single']['result'] + f'{rel_str}filtered_variants.csv',
+    SAMPLE_DICT['S3']['demulti']['result'] + f'{rel_str}filtered_variants.csv']
+
+
+rule get_whitelist:
+    input:
+        wl_input
+    output:
+        os.path.join(OUT_DIR, 'whitelist_all.txt')
+    run:
+        loci = []
+        for var_file in input:
+            file_loci = pd.read_csv(var_file, usecols=[0, 1], dtype=str) \
+                .apply(lambda x: ','.join(x), axis=1).values
+            loci.extend(file_loci)
+            print(f'File: {var_file}; #Loci: {len(file_loci)}')
+        
+        loci_sorted = sorted(list(set(loci)),
+            key=lambda x: (CHR_ORDER[x.split(',')[0]], x))
+
+        with open(output[0], 'w') as f:
+            f.write('CHR,POS\n')
+            for i in loci_sorted:
+                f.write(i.replace('_', ',') + '\n')
+
+
+rule mosaic_whitelist_demultiplexed:
+    input:
+        loom = ancient(SAMPLE_DICT['S1']['demulti']['loom']),
+        assignment = SAMPLE_DICT['S1']['demulti']['result'][:-3] \
+            + '.demoTape.assignments.tsv',
+        whitelist = os.path.join(OUT_DIR, 'whitelist_all.txt')
+    output:
+        expand(os.path.join(OUT_DIR, 'fig5_{cl}.whitelist.filtered_variants.csv'),
+            cl=SAMPLE_CL_MAP.keys())
+    wildcard_constraints:
+        cl = r'[123]'
+    conda: os.path.join(ENV_DIR, 'analysis.yaml')
+    threads: 1
+    resources:
+        mem_mb_per_cpu = 49152,
+        runtime = 60,
+    params:
+        minGQ = config.get('mosaic', {}).get('minGQ', 30),
+        minDP = config.get('mosaic', {}).get('minDP', 10),
+        minVAF = config.get('mosaic', {}).get('minVAF', 0.2),
+        minVarGeno = config.get('mosaic', {}).get('minVarGeno', 0.5),
+        minCellGeno = config.get('mosaic', {}).get('minCellGeno', 0.5),
+        minMutated = 50, # Set to 50 for smaller datasets!
+        maxRefVAF = config.get('mosaic', {}).get('maxRefVAF', 0.05),
+        minHomVAF = config.get('mosaic', {}).get('minHomVAF', 0.95),
+        minHetVAF = config.get('mosaic', {}).get('minHetVAF', 0.35),
+        proximity = config.get('mosaic', {}).get('proximity', '25 50 100 200'),
+        out_base = os.path.join(OUT_DIR, 'fig5.filtered_variants.csv')
+    shell:
+        """
+        python {SCRIPT_DIR}/mosaic_preprocessing.py \
+            -i {input.loom} \
+            -a {input.assignment} \
+            -wl {input.whitelist} \
+            -o {params.out_base} \
+            --minGQ {params.minGQ} \
+            --minDP {params.minDP} \
+            --minVAF {params.minVAF} \
+            --minVarGeno {params.minVarGeno} \
+            --minCellGeno {params.minCellGeno} \
+            --minMutated {params.minMutated} \
+            --max_ref_VAF {params.maxRefVAF} \
+            --min_hom_VAF {params.minHomVAF} \
+            --min_het_VAF {params.minHetVAF} \
+            --proximity {params.proximity}
+        """
+
+
+def get_whitelist_single_input(wildcards):
+    loom = ancient(SAMPLE_DICT[wildcards.sample]['single']['loom']),
+    whitelist = os.path.join(OUT_DIR, 'whitelist_all.txt')
+    return {'loom': loom, 'whitelist': whitelist}
+
+
+rule mosaic_whitelist_single:
+    input:
+        unpack(get_whitelist_single_input)
+    output:
+        os.path.join(OUT_DIR, 'fig5.{sample}.whitelist.filtered_variants.csv')
+    wildcard_constraints:
+        sample = r'S[123]'
+    conda: os.path.join(ENV_DIR, 'analysis.yaml')
+    threads: 1
+    resources:
+        mem_mb_per_cpu = 49152,
+        runtime = 60,
+    params:
+        minGQ = config.get('mosaic', {}).get('minGQ', 30),
+        minDP = config.get('mosaic', {}).get('minDP', 10),
+        minVAF = config.get('mosaic', {}).get('minVAF', 0.2),
+        minVarGeno = config.get('mosaic', {}).get('minVarGeno', 0.5),
+        minCellGeno = config.get('mosaic', {}).get('minCellGeno', 0.5),
+        minMutated = 50, # Set to 50 for smaller datasets!
+        maxRefVAF = config.get('mosaic', {}).get('maxRefVAF', 0.05),
+        minHomVAF = config.get('mosaic', {}).get('minHomVAF', 0.95),
+        minHetVAF = config.get('mosaic', {}).get('minHetVAF', 0.35),
+        proximity = config.get('mosaic', {}).get('proximity', '25 50 100 200'),
+        out_base = lambda w:
+            os.path.join(OUT_DIR, f'fig5.{w.sample}.filtered_variants.csv')
+    shell:
+        """
+        python {SCRIPT_DIR}/mosaic_preprocessing.py \
+            -i {input.loom} \
+            -wl {input.whitelist} \
+            -o {params.out_base} \
+            --minGQ {params.minGQ} \
+            --minDP {params.minDP} \
+            --minVAF {params.minVAF} \
+            --minVarGeno {params.minVarGeno} \
+            --minCellGeno {params.minCellGeno} \
+            --minMutated {params.minMutated} \
+            --max_ref_VAF {params.maxRefVAF} \
+            --min_hom_VAF {params.minHomVAF} \
+            --min_het_VAF {params.minHetVAF} \
+            --proximity {params.proximity}
+        """
+
+
+def get_subsampling_input(wildcards):
+    wl_single = os.path.join(OUT_DIR,
+        f'fig5.{wildcards.sample}.whitelist.filtered_variants.csv')
+    wl_demulti = os.path.join(OUT_DIR,
+        f'fig5_{CL_SAMPLE_MAP[wildcards.sample]}.whitelist.filtered_variants.csv')
+    init_single = SAMPLE_DICT[wildcards.sample]['single']['result'] \
+        + f'{rel_str}filtered_variants.csv'
+    init_demulti = SAMPLE_DICT[wildcards.sample]['demulti']['result'] \
+        + f'{rel_str}filtered_variants.csv'
+    return {'wl_single': wl_single, 'wl_demulti': wl_demulti,
+        'init_single': init_single, 'init_demulti': init_demulti}
+
+
+rule subsample_var_file:
+    input:
+        unpack(get_subsampling_input)
+    output:
+        subsample_single = os.path.join(OUT_DIR,
+            'fig5.{sample}.single.final.filtered_variants.csv'),
+        subsample_demulti = os.path.join(OUT_DIR,
+            'fig5.{sample}.demulti.final.filtered_variants.csv')
+    run:
+        sep = '_'
+        loci_s = pd.read_csv(input.init_single, usecols=[0, 1], dtype=str) \
+            .apply(lambda x: sep.join(x), axis=1).to_list()
+        loci_d = pd.read_csv(input.init_demulti, usecols=[0, 1], dtype=str) \
+            .apply(lambda x: sep.join(x), axis=1).to_list()
+        loci_rel = sorted(list(set(loci_s + loci_d)),
+            key=lambda x: (CHR_ORDER[x.split(sep)[0]], x))
+
+        for in_file, out_file in [
+                (input.wl_single, output.subsample_single), 
+                (input.wl_demulti, output.subsample_demulti)]:
+            df = pd.read_csv(in_file, dtype=str)
+            df['loci'] = df['CHR'] + sep + df['POS']
+            df_out = df[df['loci'].isin(loci_rel)].drop('loci', axis=1)
+            df_out.to_csv(out_file, index=False, header=True)
+
+
+def get_VAF_hm_input(wildcards):
+    in_files = {
+        'subsample_single': os.path.join(OUT_DIR,
+            f'fig5.{wildcards.sample}.single.final.filtered_variants.csv'),
+        'subsample_demulti': os.path.join(OUT_DIR,
+            f'fig5.{wildcards.sample}.demulti.final.filtered_variants.csv'),
+        'original_single': SAMPLE_DICT[wildcards.sample]['single']['result'] \
+            + f'{rel_str}filtered_variants.csv',
+        'original_demulti': SAMPLE_DICT[wildcards.sample]['demulti']['result'] \
+            + f'{rel_str}filtered_variants.csv'
+    }
+    return in_files
+
+
+rule plot_VAF_hm:
+    input:
+        unpack(get_VAF_hm_input)
+    output:
+        os.path.join(OUT_DIR, '{sample}.VAF_heatmap_full.png')
+    conda: os.path.join(ENV_DIR, 'analysis.yaml')
+    threads: 1
+    resources:
+        mem_mb_per_cpu = 16384,
+        runtime = 30,
+    shell:
+        """
+        python {SCRIPT_DIR}/plot_VAF_heatmap_fig5.py \
+            -iwl {input.subsample_single} {input.subsample_demulti} \
+            -io {input.original_single} {input.original_demulti} \
+            -o {output}
+        """

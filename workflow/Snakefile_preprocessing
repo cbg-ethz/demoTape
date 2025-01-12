@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+
+include: 'rules/pp_common.smk'
+CONDA_PREFIX = config.get('conda_prefix', '')
+
+##### Target rules #####
+
+rule all:
+    input:
+        all_files # generated in rules/pp_common.smk
+
+
+##### Modules #####
+if CONFIG_FULL.get('proteins', True):
+    include: 'rules/pp_protein.smk'    
+
+if CONFIG_FULL.get('dna', True):
+    include: 'rules/pp_dna_part1.smk'
+    include: 'rules/pp_gatk.smk'
+    include: 'rules/pp_dna_part2.smk'
+    include: 'rules/pp_finalizing.smk'

@@ -1,22 +1,44 @@
 #!/usr/bin/env python3
 
+import os
+
 SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
-SAMPLES_N = len(config['general']['input-looms'])
+ENV_DIR = os.path.join(workflow.basedir, 'envs')
+CONDA_PREFIX = config.get('conda_prefix', '')
+
+# ----- Get sample dependent input files -----
+LOOM_FILES = config['simulations']['input-looms']
+for loom_file in LOOM_FILES:
+    assert os.path.exists(loom_file), f'Could not find loom file at: {loom_file}'
+OUT_DIR = config['simulations']['output-folder']
+
+# ----- Get simulation dependent parameters -----
 REPEATS = range( config['simulations'].get('repeats', 1))
-OUT_DIR = config['general']['output-folder']
+FRACTIONS = config['simulations'].get('fractions', [0.33, 0.33, 0.33])
+if not isinstance(FRACTIONS[0], list):
+    FRACTIONS = [FRACTIONS]
+assert len(LOOM_FILES) == len(FRACTIONS[0]), 'Fractions and samples do not match'
+DBTS = config['simulations'].get('doublets', [0.08])
+if not isinstance(DBTS, list):
+    DBTS = [DBTS]
+ALGORITHMS = [i for i in ['demoTape', 'scSplit', 'souporcell', 'vireo'] \
+    if config['simulations'].get('algorithms', {}).get(i, {}).get('run', False)]
+
+# ----- Generate target files -----
+TARGETS = [os.path.join(OUT_DIR, 'summary.png'),
+    os.path.join(OUT_DIR, 'benchmark_summary.png')]
 
 
 ##### Target rules #####
 rule all:
     input:
-        os.path.join(OUT_DIR, 'summary.png'),
-        os.path.join(OUT_DIR, 'benchmark_summary.png')
+        TARGETS
 
 
 ##### Modules #####
 if config.get('simulations', {}).get('run_early', False):
-    include: 'rules/common.smk'
-    include: 'rules/gatk_multiplex.smk'
-    include: 'rules/dna_part2_multiplex.smk'
+    include: 'rules/pp_common.smk'
+    include: 'rules/mltplx_gatk.smk'
+    include: 'rules/mltplx_dna_part2.smk'
 
 include: 'rules/simulations.smk'

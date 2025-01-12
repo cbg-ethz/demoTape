@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+
+import os
+
+
+SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
+ENV_DIR = os.path.join(workflow.basedir, 'envs')
+CONDA_PREFIX = config.get('conda_prefix', '')
+# ----- Get sample dependent input files -----
+DNA_PREFIX = config['output']['prefix']
+if config.get('tapestri', {}).get('output-folder', False):
+    res_dir = os.path.join(config['tapestri']['output-folder'], 'dna', 'results')
+    READS_FILE = os.path.join(res_dir, 'tsv', 
+        f'{DNA_PREFIX}.barcode.cell.distribution.merged.tsv')
+elif config['analysis']['specific'].get('input-dir', False):
+    res_dir = config['analysis']['specific']['input-dir']
+    READS_FILE = os.path.join(res_dir,
+        f'{DNA_PREFIX}.barcode.cell.distribution.merged.tsv')
+else:
+    raise IOError('No input files given (either tapestri results folder or ' \
+        'folder containing "<DNA_PREFIX>.cells.loom" and ' \
+        '"<DNA_PREFIX>.barcode.cell.distribution.merged.tsv" files)')
+assert os.path.exists(res_dir), f'Could not find results directory: {res_dir}'
+assert os.path.exists(READS_FILE), f'Could not find read file at: {READS_FILE}'
+LOOM_FILE = os.path.join(res_dir, f'{DNA_PREFIX}.cells.loom')
+assert os.path.exists(LOOM_FILE), f'Could not find loom file at: {LOOM_FILE}'
+SEX = config['analysis']['specific'].get('sex', 'female')
+CELL_ANNOT = config['analysis']['specific'].get('manual_annotation', '')
+OUT_DIR = os.path.join(res_dir, 'analysis')
+
+# overwrite outdir if set
+if config['analysis']['specific'].get('output-dir', False):
+    OUT_DIR = config['analysis']['specific']['output-dir']
+
+# Get RNA data if set
+if config['analysis'].get('RNA', False):
+    RNA = True
+    rna_base_dir = config['analysis']['RNA']['RNA_dir']
+    rna_prefix = config['analysis']['RNA']['RNA_prefix']
+    RNA_FILE = os.path.join(rna_base_dir, rna_prefix, 'processing',
+        f'{rna_prefix}_qc.h5ad')
+    assert os.path.exists(RNA_FILE), f'Could not find RNA file at: {RNA_FILE}'
+else:
+    RNA = False
+
+# ----- Get general, sample independent files -----
+GENE_INFO = config['analysis']['general']['gene_annotation']
+assert os.path.exists(GENE_INFO), \
+    f'Could not find gene annotation file at: {GENE_INFO}'
+PANEL_INFO = config['analysis']['general']['panel_annotation']
+assert os.path.exists(PANEL_INFO), \
+    f'Could not find annotated panel file at: {PANEL_INFO}'
+DBSNP = config['analysis']['general'].get('dbsnp', '')
+CLINVAR = config['analysis']['general'].get('clinVar', '')
+
+# Extend targets for multiplexed sample
+PREFIXES = [DNA_PREFIX]
+if config['analysis']['specific'].get('samples', 1) > 1:
+    POOLED = True
+    POOLED_SAMPLES = config['analysis']['specific']['samples']
+    PREFIXES.extend([f'{DNA_PREFIX}_{i}' for i in range(POOLED_SAMPLES)])
+
+    if config['analysis']['specific'].get('matched_RNA', ''):
+        MATCHED_RNA = True
+        rna_snp_dir = config['analysis']['specific']['matched_RNA']
+        RNA_SNPS = [os.path.join(rna_snp_dir, i) for i in os.listdir(rna_snp_dir) \
+            if i.endswith(('.final.vcf', '.final.vcf.gz'))]
+    else:
+        MATCHED_RNA = False
+else:
+    POOLED = False
+    MATCHED_RNA = False
+
+# ----- Generate target files -----
+# VAF and read plot out files
+TARGETS = expand([
+        os.path.join(OUT_DIR, '{prefix}.reads_heatmap.png'),
+        os.path.join(OUT_DIR, '{prefix}.SNP_heatmap.png'),
+        os.path.join(OUT_DIR, '{prefix}.relevant.SNP_heatmap.png')],
+    prefix=PREFIXES)
+
+# Extend algorithm out files
+RUNS = config['analysis'].get('algorithms', {}).get('runs', 1)
+DBTS = config['analysis'].get('algorithms', {}).get('doublet_rates', [0.08])
+ALGORITHMS = [i for i in ['COMPASS', 'BnpC', 'SCG'] \
+    if config['analysis'].get('algorithms', {}).get(i, {}).get('run', False)]
+REGIONS = ['genes']
+# If clonealign or COMPASS run with CNV data: add chromosome arm level analysis
+if RNA or \
+        config['analysis'].get('algorithms', {}).get('COMPASS', {}).get('CNV', 0):
+    REGIONS.append('chrArms')
+
+SNP_SETS = ['relevant', 'all'] # Only relevant SNPs; all SNPs
+def get_algorithm_files():
+    res_files = []
+    for prefix in PREFIXES:
+        for snp_set in SNP_SETS:
+            for i in range(RUNS):
+                run = f'{prefix}.{snp_set}.r{i:04d}'
+                if 'BnpC' in ALGORITHMS:
+                    res_files.append(os.path.join(OUT_DIR, 'BnpC', run,
+                        'assignment.txt'))
+                for dbt in DBTS:
+                    run_dbt = f'{run}.d{dbt:0<4}'
+                    if 'COMPASS' in ALGORITHMS:
+                        for region in REGIONS:
+                                res_files.append(os.path.join(
+                                    OUT_DIR, 'COMPASS', 
+                                    f'{run_dbt}.{region}_tree.png'))
+                    if 'SCG' in ALGORITHMS:
+                        res_files.append(os.path.join(OUT_DIR, 'SCG', run_dbt,
+                            'assignments.tsv'))
+    return res_files
+
+TARGETS.extend(get_algorithm_files())
+
+# Extend RNA/cloneAlign out file; not implemented for multiplexed samples
+if RNA:
+    TARGETS.extend(
+        [os.path.join(OUT_DIR, f'{DNA_PREFIX}.{i}.cloneAlign.tsv') for i in REGIONS])
+# Extent sample-patient mapping if matched RNA is provided
+if MATCHED_RNA:
+    TARGETS.extend([
+        os.path.join(OUT_DIR, f'{DNA_PREFIX}.sample_patient_profiles.png'),
+        os.path.join(OUT_DIR, f'{DNA_PREFIX}.sample_patient_assigments.tsv')])
+
+##### Target rules #####
+rule all:
+    input:
+        TARGETS
+
+##### Modules #####
+include: 'rules/analysis.smk'

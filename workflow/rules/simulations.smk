@@ -5,9 +5,10 @@ if config.get('simulations', {}).get('run_early', False):
         output:
             os.path.join(OUT_DIR, '{frac_dir}', 'variants',
                 'rep{n}.filtered_variants.csv')
+        conda: os.path.join(ENV_DIR, 'analysis.yaml')
         threads: 1
         resources:
-            mem_mb = 32768,
+            mem_mb_per_cpu = 32768,
             runtime = 90,
         params:
             minGQ = config.get('mosaic', {}).get('minGQ', 30),
@@ -42,30 +43,31 @@ if config.get('simulations', {}).get('run_early', False):
 else:
     rule multiplexing_simulate_late:
         input:
-            config['general']['input-looms']
+            LOOM_FILES
         output:
             var = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
                 'rep{n}.filtered_variants.csv'),
+            vcf = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
+                'rep{n}.filtered_variants.vcf'),
             RD = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
                 'rep{n}.filtered_variants_RD.csv'),
             AD = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
                 'rep{n}.filtered_variants_AD.csv'),
             RD_sm = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
                 'rep{n}.filtered_variants_RD.mtx'),
-            AD_sm = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
+            AD_sm = os.path.join(OUT_DIR, '{frac_dir}', 'variants', 
                 'rep{n}.filtered_variants_AD.mtx'),
             barcodes = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
-                'rep{n}.filtered_variants_barcodes.csv'),
-            vcf = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
-                'rep{n}.filtered_variants.vcf')
+                'rep{n}.barcodes.csv')
+        conda: os.path.join(ENV_DIR, 'analysis.yaml')
         threads: 1
         resources:
-            mem_mb = 49152,
+            mem_mb_per_cpu = 49152,
             runtime = 240,
         params:
-            ratios = lambda w: re.search('([-0\.\d]+)-d0\.\d+', f'{w.frac_dir}') \
+            ratios = lambda w: re.search(r'([-0\.\d]+)-d0\.\d+', f'{w.frac_dir}') \
                 .group(1).replace('-', ' '),
-            doublets = lambda w: re.search('-d(0\.\d+)', f'{w.frac_dir}').group(1),
+            doublets = lambda w: re.search(r'-d(0\.\d+)', f'{w.frac_dir}').group(1),
             minGQ = config.get('mosaic', {}).get('minGQ', 30),
             minDP = config.get('mosaic', {}).get('minDP', 10),
             minVAF = config.get('mosaic', {}).get('minaVAF', 0.2),
@@ -105,21 +107,23 @@ rule demultiplexing_demoTape:
     output:
         os.path.join(OUT_DIR, '{frac_dir}', 'demoTape',
             'rep{n}.demoTape.assignments.tsv')
+    conda: os.path.join(ENV_DIR, 'analysis.yaml')
     threads: 1
     resources:
-        mem_mb = 4096,
+        mem_mb_per_cpu = 4096,
         runtime = 360,
     benchmark:
         os.path.join(OUT_DIR, 'benchmarks', '{frac_dir}.{n}.demoTape.txt')
     params:
         out_base = lambda w: os.path.join(OUT_DIR, f'{w.frac_dir}', 'demoTape',
             f'rep{w.n}.demoTape'),
+        sample_no = len(LOOM_FILES)
     shell:
         """
         python {SCRIPT_DIR}/demultiplex_distance.py \
             -i {input} \
             -o {params.out_base} \
-            -n {SAMPLES_N}
+            -n {params.sample_no}
         """
 
 
@@ -132,22 +136,24 @@ rule demultiplexing_scSplit:
     output:
         os.path.join(OUT_DIR, '{frac_dir}', 'scSplit',
             'rep{n}', 'scSplit_result.csv')
+    conda: os.path.join(ENV_DIR, 'scSplit.yaml') # requires to manually set exe file in config
     threads: 1
     resources:
-        mem_mb = 16384,
+        mem_mb_per_cpu = 16384,
         runtime = 180,
     benchmark:
         os.path.join(OUT_DIR, 'benchmarks', '{frac_dir}.{n}.scSplit.txt')
     params:
         exe = config['scSplit']['exe'],
         out_dir = lambda w: os.path.join(OUT_DIR, f'{w.frac_dir}', 'scSplit',
-            f'rep{w.n}')
+            f'rep{w.n}'),
+        sample_no = len(LOOM_FILES)
     shell:
         """
         python {params.exe} run  \
             -r {input.RD} \
             -a {input.AD} \
-            -n {SAMPLES_N} \
+            -n {params.sample_no} \
             -o {params.out_dir}
         """
 
@@ -159,13 +165,14 @@ rule demultiplexing_souporcell:
         AD = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
             'rep{n}.filtered_variants_AD.mtx'),
         barcodes = os.path.join(OUT_DIR, '{frac_dir}', 'variants',
-            'rep{n}.filtered_variants_barcodes.csv')
+            'rep{n}.barcodes.csv')
     output:
         os.path.join(OUT_DIR, '{frac_dir}', 'souporcell',
             'rep{n}', 'souporcell_result.tsv')
+    conda: os.path.join(ENV_DIR, 'souporcell.yaml') # Env requires manual action!
     threads: 4
     resources:
-        mem_mb = 8192,
+        mem_mb_per_cpu = 8192,
         runtime = 120,
     benchmark:
         os.path.join(OUT_DIR, 'benchmarks', '{frac_dir}.{n}.souporcell.txt')
@@ -174,14 +181,15 @@ rule demultiplexing_souporcell:
         exe_dbt = config['souporcell']['troublet'],
         min_alt = config['souporcell'].get('min_alt', 10),
         min_ref = config['souporcell'].get('min_ref', 10),
-        restarts = config['souporcell'].get('restarts', 100)
+        restarts = config['souporcell'].get('restarts', 100),
+        sample_no = len(LOOM_FILES)
     shell:
         """
         {params.exe} \
             --alt_matrix {input.AD} \
             --ref_matrix {input.RD} \
             --barcodes {input.barcodes} \
-            --num_clusters {SAMPLES_N} \
+            --num_clusters {params.sample_no} \
             --threads {threads} \
             --min_alt {params.min_alt} \
             --min_ref {params.min_ref} \
@@ -202,19 +210,21 @@ rule demultiplexing_vireo:
     output:
         os.path.join(OUT_DIR, '{frac_dir}', 'vireo',
             'rep{n}', 'vireo_result.tsv')
+    conda: os.path.join(ENV_DIR, 'vireo.yaml')
     threads: 4
     resources:
-        mem_mb = 8192,
+        mem_mb_per_cpu = 8192,
         runtime = 90,
     benchmark:
         os.path.join(OUT_DIR, 'benchmarks', '{frac_dir}.{n}.vireo.txt')
     params:
         out_dir = lambda w: os.path.join(OUT_DIR, f'{w.frac_dir}', 'vireo',
-            f'rep{w.n}')
+            f'rep{w.n}'),
+        sample_no = len(LOOM_FILES)
     shell:
         """
         vireo -c {input.vcf} \
-            -N {SAMPLES_N} \
+            -N {params.sample_no} \
             -o {params.out_dir} \
             -t GT \
             --noPlot \
@@ -244,9 +254,10 @@ rule demultiplexing_summary:
         get_demultiplexed_files
     output:
         os.path.join(OUT_DIR, '{frac_dir}', 'summary.tsv')
+    conda: os.path.join(ENV_DIR, 'analysis.yaml')
     threads: 1
     resources:
-        mem_mb = 2048,
+        mem_mb_per_cpu = 2048,
         runtime = 30
     shell:
         """
@@ -281,9 +292,10 @@ rule demultiplexing_merge_summaries:
         get_summary_files
     output:
         os.path.join(OUT_DIR, 'summary.tsv')
+    conda: os.path.join(ENV_DIR, 'analysis.yaml')
     threads: 1
     resources:
-        mem_mb = 2048,
+        mem_mb_per_cpu = 2048,
         runtime = 30
     shell:
         """
@@ -298,9 +310,10 @@ rule generate_summary_plot:
         os.path.join(OUT_DIR, 'summary.tsv')
     output:
         os.path.join(OUT_DIR, 'summary.png')
+    conda: os.path.join(ENV_DIR, 'analysis.yaml')
     threads: 1
     resources:
-        mem_mb = 4096,
+        mem_mb_per_cpu = 4096,
         runtime = 30
     shell:
         """
@@ -319,12 +332,11 @@ def get_benchmark_files(frac_dir):
         if config.get(alg_other, {}).get('run', False):
             algs.append(alg_other)  
 
-
-    for fracs in config['simulations']['fractions']:
-        for dbt in config['simulations']['doublets']:
+    for fracs in FRACTIONS:
+        for dbt in DBTS:
             frac_str = '-'.join([str(i) for i in fracs]) + f'-d{dbt:.2f}'
             for n in REPEATS:
-                for alg in algs:
+                for alg in ALGORITHMS:
                     files.append(os.path.join(OUT_DIR, 'benchmarks',
                         f'{frac_str}.{n}.{alg}.txt'))
     return files
@@ -335,9 +347,10 @@ rule merge_benchmarks:
         get_benchmark_files
     output:
         os.path.join(OUT_DIR, 'benchmark_summary.tsv')
+    conda: os.path.join(ENV_DIR, 'analysis.yaml')
     threads: 1
     resources:
-        mem_mb = 4096,
+        mem_mb_per_cpu = 4096,
         runtime = 30
     shell:
         """
@@ -350,9 +363,10 @@ rule generate_benchmark_plot:
         os.path.join(OUT_DIR, 'benchmark_summary.tsv')
     output:
         os.path.join(OUT_DIR, 'benchmark_summary.png')
+    conda: os.path.join(ENV_DIR, 'analysis.yaml')
     threads: 1
     resources:
-        mem_mb = 4096,
+        mem_mb_per_cpu = 4096,
         runtime = 30
     shell:
         """

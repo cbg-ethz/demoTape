@@ -13,6 +13,7 @@ import loompy
 import numpy as np
 import pandas as pd
 
+EPSILON = np.finfo(np.float64).resolution
 
 CHR_ORDER = {str(i): i for i in range(1, 23)}
 CHR_ORDER.update({'X':23, 'Y':24})
@@ -30,82 +31,14 @@ VCF_HEADER ='##fileformat=VCFv4.3\n' \
 VCF_BODY_ROW = '{chr}\t{pos}\t{chr}:{pos}\t{ref}\t{alt}\t.\tPASS\t.\tGT:DP:AD\t{data}\n'
 
 
-def plot_heatmap(df, SNPs=None, cells=None, out_file=None,
-            cluster=True):
-    COLORS = ['#e41a1c', '#377eb8', '#4daf4a', '#E4761A' , '#2FBF85']
-    from matplotlib import pyplot as plt
-    from matplotlib.colors import LinearSegmentedColormap
-    from seaborn import clustermap
-
-    myColors = ('#EAEAEA', '#fed976', '#fc4e2a', '#800026')
-    cmap = LinearSegmentedColormap.from_list('Custom', myColors, len(myColors))
-
-    if isinstance(cells, (list, pd.Series, np.ndarray)):
-        r_colors = [[], []]
-        for i in cells:
-            if '+' in i:
-                s1, s2 = sorted([int(j[-1]) for j in i.split('+')])
-                r_colors[0].append(COLORS[s1])
-                r_colors[1].append(COLORS[s2])
-            else:
-                r_colors[0].append(COLORS[int(i[-1])])
-                r_colors[1].append('#FFFFFF')
-        y_labels = cells
-    else:
-        r_colors = None
-        y_labels = 'auto'
-
-    if isinstance(SNPs, (list, pd.Series, np.ndarray)):
-        x_labels = SNPs
-    else:
-        x_labels = 'auto'
-
-    df[df == 3] = -1
-    if df.shape[0] < df.shape[1]: # Wrong dimensions: transpose
-        df = df.T
-    cm = clustermap(
-        df,
-        row_cluster=cluster,
-        col_cluster=cluster,
-        vmin=-1, vmax=2,
-        row_colors=r_colors,
-        cmap=cmap,
-        figsize=(25, 10),
-        xticklabels=x_labels,
-        yticklabels=y_labels,
-        cbar_kws={'shrink': 0.5, 'drawedges': True}
-    )
-    cm.ax_heatmap.set_ylabel('Cells')
-    if df.shape[0] > 50:
-        cm.ax_heatmap.set_yticks([])
-    cm.ax_heatmap.set_xlabel('SNPs')
-
-    cm.ax_heatmap.set_xticklabels(cm.ax_heatmap.get_xticklabels(),
-        rotation=45, fontsize=5, ha='right', va='top')
-
-    cm.ax_col_dendrogram.set_visible(False)
-
-    colorbar = cm.ax_heatmap.collections[0].colorbar
-    colorbar.set_ticks([-0.65, 0.15, 0.85, 1.65])
-    colorbar.set_ticklabels([r' $-$', '0|0', '0|1', '1|1'])
-
-    cm.fig.tight_layout()
-    if out_file:
-        print(f'Saving heatmap to: {out_file}')
-        cm.fig.savefig(out_file, dpi=DPI)
-    else:
-        plt.show()
-
-
 def get_assignment_dict(assignment_file):
-    assign = pd.read_csv(assignment_file, index_col=0, dtype='str',sep='\t')
+    df = pd.read_csv(assignment_file, index_col=0, dtype='str',sep='\t').T
 
     clusters = {}
-    for cl in np.unique(assign):
+    for cl in df['Cluster'].unique():
         if '+' in cl:
             continue
-        cl_name = f'.{cl}'
-        clusters[cl_name] = assign.columns[(assign == cl).values.flatten()].values
+        clusters[f'_{cl}'] = df[df['Cluster'] == cl].index.values
     return clusters
 
 
@@ -144,137 +77,84 @@ def main(args):
         if len(WHITELIST) != 0:
             df4, gt4 = filter_variants_WL(df4, gt4, args)
 
-        # Generate regions file if panel with gene name data is provided
-        if args.panel:
-            try:
-                gene_file = [i for i in os.listdir(args.panel) \
-                    if i.endswith('-submitted.bed')][0]
-            except KeyError:
-                raise IOError(f'No <PANEL>-submitted.bed file in {args.panel}')
-                
-            pa_raw = pd.read_csv(os.path.join(args.panel, gene_file),
-                sep='\t', header=None, skiprows=[0])
-            pa_raw[0] = pa_raw[0].str.replace('chr', '')
-            regions = []
-            for gene, reg_df in pa_raw.groupby(3):
-                if not gene.startswith('chr'):
-                    gene = gene.split(':')[0]
-                regions.append(
-                    [reg_df.iloc[0, 0], reg_df[1].min(), reg_df[2].max(), gene])
-            pa = pd.DataFrame(regions, columns=['chr', 'start', 'stop', 'gene'])
+        SNP_id = df4['CHR'] + ':' + df4['POS'].astype(str) + ':' + df4['REF'] \
+            + '/' + df4['ALT']
+        cells = df4.columns[7:].values
 
-            for i, data in df4.iterrows():
-                overlap = pa[(pa['chr'] == data['CHR']) \
-                    & (data['POS'] >= pa['start']) & (data['POS'] <= pa['stop'])]
-                if overlap.size == 0:
-                    continue
-                elif overlap.shape[0] == 1:
-                    df4.loc[i, 'REGION'] = overlap.iloc[0, 3]
-                elif overlap['gene'].unique().size == 1:
-                    df4.loc[i, 'REGION'] = overlap['gene'].unique()[0]
-                elif len([i for i in overlap['gene'].unique() \
-                        if not i.startswith('chr')]) == 1:
-                    df4.loc[i, 'REGION'] = [i for i in overlap['gene'].unique() \
-                        if not i.startswith('chr')][0]
-                else:
-                    import pdb; pdb.set_trace()
-            map_r = {j["gene"]: f'{j["chr"]}_{j["gene"]}' for _, j in pa.iterrows()}
-            for i in df4['REGION']:
-                if i not in map_r:
-                    chrom = df4[df4['NAME'] == i].iloc[0, 0]
-                    map_r[i] = f'{chrom}_{i}'
-
-            DP = df4.iloc[:,7:].applymap(
-                lambda x: sum([i for i in map(int, x.split(':')[:2])]))
-            DP['REGION'] = df4['REGION']
-
-            DP_r = DP.groupby('REGION').sum()
-            DP_r.rename(index=map_r, inplace=True)
-
-        if args.output:
-            if args.output.endswith('_variants.csv'):
-                variant_file = f'{args.output[:-13]}{cl}_variants.csv'
-                out_file_raw = os.path.splitext(variant_file)
-            else:
-                out_file_raw = os.path.splitext(args.output)
-                variant_file = f'{out_file_raw[0]}{cl}{out_file_raw[1]}'
+        if not args.output:
+            out_base = args.input[0].split('.cells.')[0]
         else:
-            variant_file = f'{os.path.splitext(args.input[0])[0]}{cl}_variants.csv'
-            out_file_raw = os.path.splitext(variant_file)
+            if args.output.endswith('.filtered_variants.csv'):
+                out_base = args.output[:-22]
+            else:
+                out_base = os.path.splitext(args.output)[0]
 
-        out_dir = os.path.dirname(variant_file)
+        out_dir = os.path.dirname(out_base)
         if not os.path.exists(out_dir):
             os.makedirs(out_dir)
             print(f'Creating output directory: {out_dir}')
 
-        # Filtering germlines
-        gt = gt4.astype(float)
-        gt[gt == 3] = np.nan
-        germline = np.nanstd(gt == 1, axis=1) < args.minStd
+        if args.whitelist:
+            wl = '.whitelist'
+        else:
+            wl = ''
 
-        loci = df4['CHR'] + ':' + df4['POS'].astype(str) + ':' + df4['REF'] \
-            + '/' + df4['ALT']
-
-        gl_file = f'{out_file_raw[0]}{cl}_germlineOrArtifact.csv'
-        print(f'Writing germlines/technical artifacts to: {gl_file}')
-        with open(gl_file, 'w') as f:
-            f.write('\n'.join(loci[germline].values))
-
-        gt4 = gt4[~germline]
-        df4 = df4.iloc[~germline]
-
-        print(f'Writing variant file to: {variant_file}')
+        out_base_file = f'{out_base}{cl}{wl}'
+        variant_file = f'{out_base_file}.filtered_variants.csv'
+        print(f'Writing variant  file to: {variant_file}')
         df4.to_csv(variant_file, index=False, header=True)
-        if args.panel:
-            region_file = variant_file.replace('_variants.csv', '_regions.csv')
-            print(f'Writing region file to: {region_file}')
-            DP_r.to_csv(region_file, index=True, header=False)
+        
+        gt_file = f'{out_base_file}.filtered_variants_gt.csv'
+        print(f'Writing genotype file to: {gt_file}')
+        pd.DataFrame(gt4, index=SNP_id, columns=cells).to_csv(gt_file)
 
         if not args.full_output:
             continue
-        out_file_raw = os.path.splitext(variant_file)
-        print(out_file_raw)
-        variant_full_file = f'{out_file_raw[0]}_full{out_file_raw[1]}'
+
+        variant_full_file = f'{out_base_file}.variants_full.csv'
         df1.to_csv(variant_full_file, index=False, header=True)
 
-        save_vcf(df4.copy(deep=True), out_file_raw[0])
+        save_vcf(df4.copy(deep=True), variant_file.replace('csv', 'vcf'))
 
-        cells = df4.columns[7:].values
-
-        barcode_file = f'{out_file_raw[0]}_barcodes.csv'
+        barcode_file = f'{out_base_file}.barcodes.csv'
         with open(barcode_file, 'w') as f:
             f.write('\n'.join(cells))
 
-        RD = df4.iloc[:,7:].applymap(lambda x: int(x.split(':')[0])).set_index(loci)
-        AD = df4.iloc[:,7:].applymap(lambda x: int(x.split(':')[1])).set_index(loci)
+        try:
+            RD = df4.iloc[:,7:].map(lambda x: int(x.split(':')[0])) \
+                .set_index(SNP_id)
+            AD = df4.iloc[:,7:].map(lambda x: int(x.split(':')[1])) \
+                .set_index(SNP_id)
+        except AttributeError: # Older pandas versions < 2.1.0
+            RD = df4.iloc[:,7:].applymap(lambda x: int(x.split(':')[0])) \
+                .set_index(SNP_id)
+            AD = df4.iloc[:,7:].applymap(lambda x: int(x.split(':')[1])) \
+                .set_index(SNP_id)
         DP = RD + AD
 
-        RD_sm_file = f'{out_file_raw[0]}_RD.mtx'
-        AD_sm_file = f'{out_file_raw[0]}_AD.mtx'
+        RD_sm_file = f'{out_base_file}.filtered_variants_RD.mtx'
+        AD_sm_file = f'{out_base_file}.filtered_variants_AD.mtx'
         with open(RD_sm_file, 'w') as f_r, open(AD_sm_file, 'w') as f_a:
             for f in [f_r, f_a]:
                 f.write('%%MatrixMarket matrix coordinate real general\n' \
                     '% written by distance-demulti\n'\
-                    f'{loci.size} {cells.size} {gt4.size}\n')
-            for snv in range(loci.size):
+                    f'{SNP_id.size} {cells.size} {gt4.size}\n')
+            for snv in range(SNP_id.size):
                 for cell in range(cells.size):
                     f_r.write(f'{snv+1} {cell+1} {RD.iloc[snv, cell]}\n')
                     f_a.write(f'{snv+1} {cell+1} {AD.iloc[snv, cell]}\n')
 
-        gt_file = f'{out_file_raw[0]}_gt.csv'
-        pd.DataFrame(gt4, index=loci, columns=cells).to_csv(gt_file)
-
-        DP_file = f'{out_file_raw[0]}_DP.csv'
+        DP_file = f'{out_base_file}.filtered_variants_DP.csv'
         DP.T.to_csv(DP_file, index=True, header=True, index_label='cell_id')
 
-        AD_file = f'{out_file_raw[0]}_AD.csv'
+        AD_file = f'{out_base_file}.filtered_variants_AD.csv'
         AD.to_csv(AD_file, index=True, header=True, index_label='cell_id')
 
-        RD_file = f'{out_file_raw[0]}_RD.csv'
+        RD_file = f'{out_base_file}.filtered_variants_RD.csv'
         RD.to_csv(RD_file, index=True, header=True, index_label='cell_id')
 
 
-def save_vcf(df, out_file_base):
+def save_vcf(df, out_file):
     def conv(x):
         RD, AD, GT = x.split(':')
         if GT == '3':
@@ -286,7 +166,10 @@ def save_vcf(df, out_file_base):
     for i in df['CHR'].unique():
         cont += f'##contig=<ID={i}>\n'
 
-    df.iloc[:,7:] = df.iloc[:,7:].applymap(conv)
+    try:
+        df.iloc[:,7:] = df.iloc[:,7:].map(conv)
+    except AttributeError: # Older pandas versions < 2.1.0
+        df.iloc[:,7:] = df.iloc[:,7:].applymap(conv)
     body = ''
     for _, row in df.iterrows():
         body += VCF_BODY_ROW.format(
@@ -296,7 +179,7 @@ def save_vcf(df, out_file_base):
             alt=row['ALT'],
             data='\t'.join(row[7:]),
         )
-    with open(f'{out_file_base}.vcf', 'w') as f:
+    with open(out_file, 'w') as f:
         f.write(VCF_HEADER.format(contigs=cont, cells='\t'.join(df.columns[7:])))
         f.write(body)
 
@@ -308,8 +191,12 @@ def filter_variants(df, gt, VAF, args):
     ms = ms1 | ms2 | ms3
 
     gt[ms] = 3
-    df.iloc[:,7:] = df.iloc[:,7:] \
-        .where(~ms, df.iloc[:,7:].applymap(lambda x: x[:-1] + '3'))
+
+    try:
+        df_nan = df.iloc[:,7:].map(lambda x: x[:-1] + '3')
+    except AttributeError: # Older pandas versions < 2.1.0
+        df_nan = df.iloc[:,7:].applymap(lambda x: x[:-1] + '3')
+    df.iloc[:,7:] = df.iloc[:,7:].where(~ms, df_nan)
 
     keep_var1 = np.mean(gt == 3, axis=1) < (1 - args.minVarGeno)
     if args.minMutated < 1:
@@ -373,7 +260,6 @@ def filter_variants_WL(df, gt, args):
         else:
             # Keep everything but variants with '*'
             keep[var_ids[((bases == '*').sum(axis=1) > 0)]] = False
-            # import pdb; pdb.set_trace()
     return df[keep].reset_index(drop=True), gt[keep]
 
 
@@ -672,7 +558,6 @@ def multiplex_looms(args):
     return pd.DataFrame(variants_info), gt, VAF
 
 
-
 def process_loom(args, rel_cells=np.array([])):
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_in_file = os.path.join(temp_dir, os.path.basename(args.input[0]))
@@ -706,7 +591,6 @@ def process_loom(args, rel_cells=np.array([])):
             else:
                 mut_var = np.sum(mut, axis=1) >= args.minMutated
 
-            # ids = np.char.add(np.char.add(ds.ra['CHROM'], '_'), ds.ra['POS'].astype(str))
             var_id_all = concat_str_arrays([ds.ra['CHROM'], ds.ra['POS']])
             wl_var_id = np.argwhere(np.isin(var_id_all, WHITELIST)).flatten()
 
@@ -726,7 +610,7 @@ def process_loom(args, rel_cells=np.array([])):
             # Second filter: Remove genotype in cell with read depth < X
             gt[DP < args.minDP] = 3
             # Third filter: Remove genotype in cell with alternate allele freq < X
-            VAF = np.where(DP > 0, AD / DP, 0)
+            VAF = np.where(DP > 0, (AD + EPSILON) / (DP + EPSILON), 0)
             gt[((gt == 1) | (gt == 2)) & (VAF < args.minVAF)] = 3
 
             del DP
@@ -789,7 +673,7 @@ def update_whitelist(wl_file):
                 WHITELIST.append('_'.join(snv.split('_')[:2]))
     # Just 1 column: either wrong separator or direct whitelist entries
     elif df.shape[1] == 1:
-        if re.match('[\dXY]{1,2}_\d+', df.columns[0]):
+        if re.match(r'[\dXY]{1,2}_\d+', df.columns[0]):
             with open(wl_file, 'r') as f:
                 ids = f.read().strip().split('\n')
         else:
@@ -818,9 +702,6 @@ def parse_args():
         help='Input loom file. If more given, multiplex snythetically.')
     parser.add_argument('-a', '--assignment', type=str, default='',
         help='Assignment of cells to clusters. Create output for each cluster.')
-    parser.add_argument('-pa', '--panel', type=str, default='',
-        help='Path to (panel) Designer folder with XX-submitted.bed and ' \
-        'XX-amplicon.bed file. Required for defining genes as regions.')
     parser.add_argument('-wl', '--whitelist', type=str, default='',
         help='Whitelist containing SNVs for plotting. Default = None.')
     parser.add_argument('-o', '--output', type=str, help='Output file')

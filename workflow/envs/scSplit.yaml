@@ -1,0 +1,13 @@
+name: scSplit
+dependencies:
+  - python
+  - pip
+  - pip:
+    - numpy
+    - pandas
+    - pysam
+    - PyVCF
+    - scikit-learn
+    - scipy
+    - statistics
+    - scSplit

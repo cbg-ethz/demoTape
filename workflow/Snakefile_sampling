@@ -1,18 +1,48 @@
 #!/usr/bin/env python3
 
-SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
-OUT_DIR = config['general']['output-folder']
+import os
 
-RUNS_TOTAL = config['sampling']['runs']
-RUNS_NO = [f'{i:04d}' for i in range(RUNS_TOTAL)]
-CELL_NO = config['sampling']['cell_no']
-CELL_STR = '-'.join([str(i) for i in CELL_NO])
-DOUBLET_RATE = config['sampling'].get('doublet_rates', [0.08, 0.3])
+
+SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
+ENV_DIR = os.path.join(workflow.basedir, 'envs')
+CONDA_PREFIX = config.get('conda_prefix', '')
+# ----- Get sample dependent input files -----
+DNA_PREFIX = config['output']['prefix']
+if config.get('tapestri', {}).get('output-folder', False):
+    res_dir = os.path.join(config['tapestri']['output-folder'], 'dna', 'results')
+elif config['analysis']['specific'].get('input-dir', False):
+    res_dir = config['analysis']['specific']['input-dir']
+else:
+    raise IOError('No input files given (either tapestri results folder or ' \
+        'folder containing "<DNA_PREFIX>.cells.loom")')
+assert os.path.exists(res_dir), f'Could not find results directory: {res_dir}'
+LOOM_FILE = os.path.join(res_dir, f'{DNA_PREFIX}.cells.loom')
+assert os.path.exists(LOOM_FILE), f'Could not find loom file at: {LOOM_FILE}'
+SEX = config['analysis']['specific'].get('sex', 'female')
+OUT_DIR = os.path.join(res_dir, 'analysis')
+
+# overwrite outdir if set
+if config['analysis']['specific'].get('output-dir', False):
+    OUT_DIR = config['analysis']['specific']['output-dir']
+
+# Extend algorithm out files
+RUNS = config['analysis'].get('algorithms', {}).get('runs', 1)
+DBTS = config['analysis'].get('algorithms', {}).get('doublet_rates', [0.08])
+ALGORITHMS = [i for i in ['COMPASS', 'BnpC', 'SCG'] \
+    if config['analysis'].get('algorithms', {}).get(i, {}).get('run', False)]
+CELL_NO = config['analysis']['sampling']['cell_no']
+
+# ----- Get general, sample independent files -----
+DBSNP = config['analysis']['general'].get('dbsnp', '')
+
+# ----- Generate target files -----
+TARGETS = [os.path.join(OUT_DIR, 'summary_sampling.tsv')]
+
 
 ##### Target rules #####
 rule all:
     input:
-        os.path.join(OUT_DIR, f'summary.r{RUNS_TOTAL}.c{CELL_STR}.tsv')
+        TARGETS
 
 
 ##### Modules #####

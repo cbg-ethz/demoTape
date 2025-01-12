@@ -4,18 +4,15 @@ import argparse
 import os
 import re
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.cluster.hierarchy import linkage, leaves_list
-from scipy.spatial.distance import pdist, euclidean
+from scipy.spatial.distance import cityblock
 from sklearn.metrics.cluster import adjusted_rand_score, adjusted_mutual_info_score
-import seaborn as sns
-from tqdm import tqdm
 
-sns.set_context('talk')
+
+BNPC_PATTERN = r'BnpC/c(\d+)\.r(\d+)(?:\.relevant)*/'
+COMPASS_PATTERN = r'COMPASS/c(\d+)\.r(\d+)(?:\.relevant)*\.d(0.\d+)_cell'
+SCG_PATTERN = r'SCG/c(\d+)\.r(\d+)(?:\.relevant)*\.d(0.\d+)/'
 
 
 def merge_gt(gt_in):
@@ -31,318 +28,248 @@ def merge_gt(gt_in):
 
 
 def get_COMPASS_results(assign_file):
+    # Read cell assignments
     cells_att = pd.read_csv(assign_file, sep='\t', index_col=0)
+    cells_att.sort_index(inplace=True)
+    cells_att['node'] = cells_att \
+        .apply(lambda x: float(x.node) if x.doublet == 'no' else np.nan, axis=1)
 
+    # Read node genotypes
     gt_file = assign_file.replace('cellAssignments', 'nodes_genotypes')
     gt_nodes = pd.read_csv(gt_file, sep='\t')
     gt_nodes.set_index(gt_nodes['node'].str.replace('Node ', '').astype(int),
         inplace=True)
     gt_nodes.drop('node', axis=1, inplace=True)
+    gt_nodes.loc[np.nan] = np.nan
 
-    sgt_idx = cells_att[cells_att['doublet'] == 'no'].index
-    sgt_assign = cells_att.loc[sgt_idx, 'node'].astype(int)
-    gt = gt_nodes.loc[sgt_assign]
-    gt.set_index(sgt_idx, inplace=True)
-    assign_df = pd.DataFrame([sgt_assign.values + 1, np.zeros(sgt_assign.size)],
-        columns=sgt_idx).T
+    gt = gt_nodes.loc[cells_att['node']].set_index(cells_att.index)
+    
+    # Rename COMPASS output to match SNP annotation
+    var_file = re.sub(r'\.d(\d\.)+.*$', '.filtered_variants.csv',
+        assign_file.replace('COMPASS', 'samples'))
+    df_var = pd.read_csv(var_file, dtype='str')
+    snps = df_var['CHR'] + ':' + df_var['POS'] + ':' + df_var['REF'] + '/' + df_var['ALT']
+    compass_annot = df_var.apply(lambda x: f'chr{x["CHR"]}_{x['POS']}({x["REGION"]})', axis=1)
+    
+    gt.rename(dict(zip(compass_annot, snps)), axis=1, inplace=True)
+    gt = gt[sorted(gt.columns)]
 
-    dbt_idx = cells_att[cells_att['doublet'] == 'yes'].index
-    if dbt_idx.size > 0:
-        dbt_cl_df = cells_att.loc[dbt_idx, 'node'].astype(str).str.split('+') \
-            .apply(lambda x: [int(i) for i in x])
-        dbt_assign = np.concatenate(dbt_cl_df.values).reshape((dbt_idx.size, 2))
-        dbt_gt = pd.DataFrame(
-            np.apply_along_axis(merge_gt, axis=1, arr=gt_nodes.values[dbt_assign]),
-            index=dbt_idx, columns=gt_nodes.columns)
-        assign_df = assign_df.append(pd.DataFrame(dbt_assign + 1, index=dbt_idx))
-        gt = gt.append(dbt_gt).loc[cells_att.index]
-
-    return assign_df.loc[cells_att.index], gt
+    return cells_att['node'].sort_index(), gt.sort_index()
 
 
 def get_BnpC_results(assign_file):
-    assign = np.array(
-        pd.read_csv(assign_file, sep='\t').loc[0, 'Assignment'].split(' '),
+    chain = 'mean'
+    estimator = 'posterior'
+    # Read cell assignment
+    df = pd.read_csv(assign_file, sep='\t', index_col=[0,1])
+    assign = np.array(df.loc[(chain, estimator), 'Assignment'].split(' '),
         dtype=int)
 
-    gt_file = os.path.join(os.path.dirname(assign_file), 'genotypes_posterior_mean.tsv')
+    # Read cell genotype
+    gt_file = os.path.join(os.path.dirname(assign_file),
+        f'genotypes_{estimator}_{chain}.tsv')
     gt = pd.read_csv(gt_file, sep='\t', index_col=0).T
+    gt = gt[sorted(gt.columns)]
 
+    # Read SNPs
     path_dirs = os.path.abspath(assign_file).split(os.sep)
     sample_file = os.path.join(*[os.sep] + path_dirs[:-3] \
         + ['samples', f'{path_dirs[-2]}.filtered_variants.csv'])
+    # Read cell names
     with open(sample_file, 'r') as f:
         cells = f.readline().strip().split(',')[7:]
     gt.index = cells
-    return pd.Series(assign, index=cells), gt
+
+    return pd.Series(assign, index=cells).sort_index(), gt.sort_index()
 
 
 def get_SCG_results(assign_file):
+    # Read cell assignment
     cells_att = pd.read_csv(assign_file, sep='\t', index_col=0)
+    cells_att.sort_index(inplace=True)
+    cells_att.rename({i: i.strip('\'b') for i in cells_att.index}, axis=0, inplace=True)
 
+    
+    # Read cell genotype
     gt_file = os.path.join(os.path.dirname(assign_file), 'Cluster_genotypes.tsv')
-    gt_nodes = pd.read_csv(gt_file, sep='\t', index_col=0)
+    gt = pd.read_csv(gt_file, sep='\t', index_col=0)
+    gt.rename({i: i.strip('\'b') for i in gt.columns}, axis=1, inplace=True)
+    gt = gt[sorted(gt.columns)]
+    gt = gt.loc[cells_att.loc[:, 'cluster_id']]
 
-    gt = gt_nodes.loc[cells_att.loc[:, 'cluster_id']]
-    return cells_att['cluster_id'], gt.set_index(cells_att.index)
-
-
-def plot_coclustering_matrix(df, out_file=''):
-    dist = pdist(df, dist_nan)
-    Z = linkage(np.nan_to_num(dist, 10), 'ward')
-    cell_order = leaves_list(Z)
-
-    fig, ax = plt.subplots(figsize=(15, 15))
-    hm = sns.heatmap(
-        df.iloc[cell_order,cell_order],
-        ax=ax,
-        square=True,
-        vmin=0,
-        vmax=1,
-        cmap='Reds',
-        linewidths=0,
-        linecolor='lightgray',
-        cbar_kws={'label': 'avg. pairwise-cluster-distance'}
-    )
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_ylabel('Cells')
-    ax.set_xlabel('Cells')
-
-    plt.subplots_adjust(**{
-        'left': 0.05,
-        'right': 0.95,
-        'top': 0.95,
-        'bottom': 0.05
-    })
-    if out_file:
-        if not out_file.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg')):
-            out_file += '.png'
-        fig.savefig(out_file, dpi=300)
-    else:
-        plt.show()
+    return cells_att['cluster_id'].sort_index(), gt.set_index(cells_att.index).sort_index()
 
 
-def get_ground_truth(in_files, c_max, min_cells):
+def get_ground_truth(in_files, c_max):
     data = {}
     for in_file in in_files:
-        if int(re.search('c(\d+)\.r\d+', in_file).group(1)) != c_max:
+        # Keep only max cell numbers
+        if int(re.search(r'c(\d+)\.r\d+', in_file).group(1)) != c_max:
             continue
+
         if re.search('COMPASS', in_file):
             alg = 'COMPASS'
             try:
-                dbt = re.search('c\d+\.r\d+\.d(0.\d+)', in_file).group(1)
+                dbt = re.search(COMPASS_PATTERN, in_file).group(3)
             except AttributeError:
                 continue
+            run_no = re.search(COMPASS_PATTERN, in_file).group(2)
             assign, gt = get_COMPASS_results(in_file)
         elif re.search('BnpC', in_file):
             alg = 'BnpC'
             dbt = '-1'
+            run_no = re.search(BNPC_PATTERN, in_file).group(2)
             assign, gt = get_BnpC_results(in_file)
         elif re.search('SCG', in_file):
             alg = 'SCG'
             try:
-                dbt = re.search('c\d+\.r\d+\.d(0.\d+)', in_file).group(1)
+                dbt = re.search(SCG_PATTERN, in_file).group(3)
             except AttributeError:
                 continue
+            run_no = re.search(SCG_PATTERN, in_file).group(2)
             assign, gt = get_SCG_results(in_file)
 
-        filter_small_clusters(assign, gt, min_cells)
-
+        assign.name = f'{alg}_{run_no}'
+        gt.name = f'{alg}_{run_no}'
+        
+        if '.relevant' in in_file:
+            subset = 'relevant'
+            SNPs_relevant = set(gt.columns)
+        else:
+            subset = 'all'
+            SNPs_all = set(gt.columns)
+        
         if not alg in data:
             data[alg] = {}
-        if not dbt in data[alg]:
-            data[alg][dbt] = {'assign': [], 'geno': []}
+        if not subset in data[alg]:
+            data[alg][subset] = {}
+        if not dbt in data[alg][subset]:
+            data[alg][subset][dbt] = {'assign': [], 'gt': []}
+        data[alg][subset][dbt]['assign'].append(assign)
+        data[alg][subset][dbt]['gt'].append(gt)
 
-        data[alg][dbt]['assign'].append(assign)
-        data[alg][dbt]['geno'].append(gt)
-
-    gr_truth = {}
-    for alg, dbt_data in data.items():
-        gr_truth[alg] = {}
-        for dbt, rel_data in dbt_data.items():
-            gr_truth[alg][dbt] = {
-                'cluster': get_coclustering_matrix(rel_data['assign']),
-                'geno': get_geno_mean(rel_data['geno']),
-                'assign': rel_data['assign']
-            }
-
-    return gr_truth
+    # Take cells from last read gt (sorted + same in all files)
+    cells = gt.index.values
+    # Merge data
+    for alg, alg_data in data.items():
+        for subset, subset_data in alg_data.items():
+            for dbt, dbt_data in subset_data.items():
+                data[alg][subset][dbt]['assign'] = pd.concat(dbt_data['assign'], axis=1)
+                data[alg][subset][dbt]['gt'] = np.stack([i.values for i in dbt_data['gt']])
+        
+    return data, (SNPs_all, SNPs_relevant), cells
 
 
-def filter_small_clusters(assign, gt, min_cells):
-    cl_all, cl_size = np.unique(assign.values.flatten(), return_counts=True)
-    for cl_i, size_i in zip(cl_all, cl_size):
+
+def _filter_small_cl(df, min_cells):
+    cl_ids, cl_sizes = np.unique(df.values, return_counts=True)
+    val_cells = ~df.isna()
+    for cl_i, size_i in zip(cl_ids, cl_sizes):
         if size_i < min_cells:
-            if assign.ndim == 2:
-                rm_cells = (assign[0] == cl_i) & (assign[1] == 0)
-                sgt_cells = ~(rm_cells) & (np.sum(assign == cl_i, axis=1) == 1)
-
-                assign[rm_cells] = np.nan
-                assign.replace(cl_i, 0, inplace=True)
-                gt[rm_cells] = np.nan
-                for cell, cell_data in assign[sgt_cells].iterrows():
-                    if cell_data[0] == 0:
-                        assign.loc[cell] = [cell_data[1], 0]
-                    sgt_cl = assign.loc[cell, 0]
-                    gt.loc[cell] = (gt[assign[0] == sgt_cl].iloc[0]).values
-            else:
-                rm_cells = (assign == cl_i)
-                assign[rm_cells] = np.nan
-                gt[rm_cells] = np.nan
+            cl_cells = df[df == cl_i].index.values
+            val_cells.loc[cl_cells] = False
+    return val_cells
 
 
-def get_geno_mean(genos):
-    rows = genos[0].index
-    cols = genos[0].columns
-    vals = []
-    for geno in genos:
-        vals.append(geno.loc[rows, cols].values)
-    return pd.DataFrame(np.stack(vals).mean(axis=0), index=rows, columns=cols)
-
-
-def get_coclustering_matrix(assigns):
-    cells = assigns[0].index
-    vals = []
-    for assign_raw in assigns:
-        assign = assign_raw.loc[cells].values
-        if assign.ndim == 2:
-            rm_cells = np.argwhere(np.sum(~np.isfinite(assign), axis=1)).flatten()
-            vals.append((assign[None, :,0] == assign[:, None, 0]).astype(float) \
-                + (assign[None, :,0] == assign[:, None, 1]).astype(float))
-        else:
-            rm_cells = np.argwhere(~np.isfinite(assign)).flatten()
-            vals.append((assign[None,:] == assign[:,None]).astype(float))
-        if rm_cells.size > 1:
-            vals[-1][rm_cells] = np.nan
-            vals[-1][:,rm_cells] = np.nan
-
-
-    return pd.DataFrame(np.nanmean(np.stack(vals), axis=0), index=cells, columns=cells)
-
-
-def dist_nan(u, v, scale=True):
-    valid = ~np.isnan(u) & ~np.isnan(v)
-    if valid.sum() == 0:
-        return np.nan
-    if scale:
-        return euclidean(u[valid], v[valid]) / np.sqrt(np.sum(2**2 * valid.size))
-    else:
-        return euclidean(u[valid], v[valid])
-
-
-def match_gt(true_df, pred_df):
-    cells = pred_df.index
-    SNPs = set(pred_df.columns) & set(true_df.columns)
-    dist = dist_nan(
-        true_df.loc[cells, SNPs].values.ravel(), pred_df.loc[:,SNPs].values.ravel())
-    return 1 - dist, len(SNPs)
-
-
-def match_assign(true_df, pred_df):
-    cells = pred_df.index
-    pwcm = get_coclustering_matrix([pred_df])
-    dist = dist_nan(true_df.loc[cells, cells].values.ravel(), pwcm.values.ravel())
-    return 1 - dist
-
-
-def match_metric(metric, true_df, pred_df):
+def match_metric(metric, true_dfs, pred_df, min_cells):
+    val_cells_pred = _filter_small_cl(pred_df, min_cells)
     scores = []
-    for gt_assign in true_df:
-        val_true = gt_assign.dropna().index
-        val_red = pred_df.dropna().index
-        rel = set(val_true) & set(val_red)
+    for run_no, true_df in true_dfs.T.iterrows():
+        val_cells_true = _filter_small_cl(true_df, min_cells)
+        val_cells = val_cells_true & val_cells_pred
+        scores.append(metric(true_df.loc[val_cells], pred_df.loc[val_cells]))
 
-        try:
-            _ = pred_df.shape[1]
-        except IndexError:
-            x = pred_df
-            y = gt_assign
+    return np.mean(scores).round(4)
+
+
+def get_hamming_dist(true_arrs, pred_df, SNPs_all, cells_all):
+    # Get index (ground truth data) of overlapping cells and SNPs with subsample
+    # Dropping cells called as doublets in COMPASS
+    cells_idx = np.where(np.isin(cells_all, pred_df.dropna().index))[0]
+    SNPs_idx = np.where(np.isin(list(SNPs_all), pred_df.columns))[0]
+    # Drop SNPs that were not called in the ground truth data
+    SNPS_pred_idx = np.isin(pred_df.columns, list(SNPs_all))
+    pred_arr = pred_df.loc[:, SNPS_pred_idx].dropna().values
+    
+    scores = []
+    for true_arr in true_arrs[:,cells_idx,:][:,:,SNPs_idx]:
+        dbt_true = np.isnan(true_arr)
+        # For COMPASS: Exclude cells that are called as doublets
+        if dbt_true.any():
+            dbt_true_cells = np.argwhere(dbt_true.sum(axis=1) == SNPs_idx.size).ravel()
+            true_vals = np.delete(true_arr, dbt_true_cells, axis=0).ravel()
+            pred_vals = np.delete(pred_arr, dbt_true_cells, axis=0).ravel()
         else:
-            # import pdb; pdb.set_trace()
-            # pred_df.loc[pred_df[1] == 0, 1] = pred_df.loc[pred_df[1] == 0, 0]
-            # gt_assign.loc[gt_assign[1] == 0, 1] = gt_assign.loc[gt_assign[1] == 0, 0]
-
-            x = pred_df.where(lambda x: x[1] == 0, 0)[0]
-            y = gt_assign.where(lambda x: x[1] == 0, 0)[0]
-
-        try:
-            scores.append(metric(
-                y.loc[rel].values.ravel(), x.loc[rel].values.ravel()))
-        except:
-            import pdb; pdb.set_trace()
-
-    return np.mean(scores)
+            true_vals = true_arr.ravel()
+            pred_vals = pred_arr.ravel()
+        
+        scores.append(cityblock(true_vals, pred_vals) / pred_vals.size)
+    
+    return np.mean(scores).round(4)
 
 
 def main(in_files, out_file, min_cells_all, plot_pwcm=False):
-    c_max = max([int(re.search('/c(\d+)\.r\d+', i).group(1)) for i in in_files])
+    c_max = max([int(re.search(r'/c(\d+)\.r\d+', i).group(1)) for i in in_files])
+    data_gt, SNPs_gt_subsets, cells_all = get_ground_truth(in_files, c_max)
 
-    gr_tr_all = {}
     data = []
-    for min_cells in min_cells_all:
-        gr_tr = get_ground_truth(in_files, c_max, min_cells)
-        gr_tr_all[min_cells] = gr_tr
+    for i, in_file in enumerate(sorted(in_files)):
+        if re.search('COMPASS', in_file):
+            alg = 'COMPASS'
+            assign, gt = get_COMPASS_results(in_file)
+            cell_no, run_no, dbt = re.search(COMPASS_PATTERN, in_file).groups()
+        elif re.search('BnpC', in_file):
+            alg = 'BnpC'
+            assign, gt = get_BnpC_results(in_file)
+            cell_no, run_no = re.search(BNPC_PATTERN, in_file).groups()
+            dbt = '-1'
+        elif re.search('SCG', in_file):
+            alg = 'SCG'
+            assign, gt = get_SCG_results(in_file)
+            cell_no, run_no, dbt = re.search(SCG_PATTERN, in_file).groups()
 
-        for i, in_file in tqdm(enumerate(sorted(in_files))):
-            if re.search('COMPASS', in_file):
-                alg = 'COMPASS'
-                assign, gt = get_COMPASS_results(in_file)
-                try:
-                    cell_no, run_no, dbt = re.search(
-                        '/c(\d+)\.r(\d+)\.d(0.\d+)_cell', in_file).groups()
-                except AttributeError:
-                    continue
-            elif re.search('BnpC', in_file):
-                alg = 'BnpC'
-                assign, gt = get_BnpC_results(in_file)
-                cell_no, run_no = re.search('BnpC/c(\d+)\.r(\d+)/', in_file).groups()
-                dbt = '-1'
-            elif re.search('SCG', in_file):
-                alg = 'SCG'
-                assign, gt = get_SCG_results(in_file)
-                try:
-                    cell_no, run_no, dbt = re.search(
-                        'SCG/c(\d+)\.r(\d+)\.d(0.\d+)/', in_file).groups()
-                except AttributeError:
-                    continue
+        if '.relevant' in in_file:
+            subset = 'relevant'
+            SNPs_gt = SNPs_gt_subsets[1]
+        else:
+            subset = 'all'
+            SNPs_gt = SNPs_gt_subsets[0]
+        
+        assign.name = f'{alg}_{run_no}'
+        gt.name = f'{alg}_{run_no}'
 
-            filter_small_clusters(assign, gt, min_cells)
+        SNPs = set(gt.columns)
+        SNP_overlap = len(SNPs_gt & SNPs)
+        SNP_missed = len(SNPs_gt - SNPs)
+        SNP_new = len(SNPs - SNPs_gt)
+        run_data = [int(cell_no), subset, int(run_no), alg, float(dbt),
+            SNP_overlap, SNP_missed, SNP_new]
 
-            cl_no = np.isfinite(np.unique(assign)).sum()
-            if alg == 'COMPASS':
-                cl_no -= 1
+        for min_cells in min_cells_all:
+            cl_no = (assign.fillna(-1).value_counts().drop(-1, errors='ignore') \
+                >= min_cells).sum()
 
-            gt_score, SNP_overlap = match_gt(gr_tr[alg][dbt]['geno'], gt)
-            assign_score = match_assign(gr_tr[alg][dbt]['cluster'], assign)
             AR_score = match_metric(adjusted_rand_score,
-                gr_tr[alg][dbt]['assign'], assign)
+                data_gt[alg][subset][dbt]['assign'], assign, min_cells)
             Mi_score = match_metric(adjusted_mutual_info_score,
-                gr_tr[alg][dbt]['assign'], assign)
-            data.append([int(cell_no), int(run_no), min_cells, alg, float(dbt),
-                cl_no, gt_score, SNP_overlap, assign_score, AR_score, Mi_score])
-
-    df = pd.DataFrame(data,
-        columns=['cells', 'run', 'min. #cells per cluster', 'algorithm',
-            'doublet rate', '#Cluster', 'Genotyping Sim.', '#SNPs overlapping',
-            'Clustering Sim.', 'ARI', 'Mutual info'])
-    df.sort_values(['cells', 'run', 'min. #cells per cluster', 'algorithm'],
-        inplace=True)
+                data_gt[alg][subset][dbt]['assign'], assign, min_cells)
+            hamming_dist = get_hamming_dist(data_gt[alg][subset][dbt]['gt'], gt,
+                SNPs_gt, cells_all)
+            res_data = [min_cells, cl_no, AR_score, Mi_score, hamming_dist]
+            data.append(run_data + res_data)
+    run_cols = ['cells', 'subset', 'run', 'algorithm', 'doublet rate',
+        'SNPs_overlap', 'SNPs_missed', 'SNPs_new']
+    res_cols = ['min. #cells per cluster', 'Cluster', 'ARI', 'Mutual info',
+        'Norm. Hamming distance']
+    df = pd.DataFrame(data, columns=run_cols + res_cols)
+    df.sort_values(['cells', 'subset', 'run', 'min. #cells per cluster',
+        'algorithm'], inplace=True)
 
     if not out_file:
         out_dir_raw = next(i for i in in_files if '/BnpC/' in i)
         out_dir = out_dir_raw.split('/BnpC/')[0]
         out_file = os.path.join(out_dir, 'summary.tsv')
     df.to_csv(out_file, sep='\t', index=False)
-
-    if plot_pwcm:
-        out_dir = os.path.dirname(out_file)
-        for min_cells, gr_tr in gr_tr_all.items():
-            for alg, dbt_data in gr_tr.items():
-                for dbt, rel_data in dbt_data.items():
-                    out_file_cocl = os.path.join(out_dir,
-                        f'grTr_coclustering_minClSize{min_cells}_{alg}_d{dbt}.png')
-                    plot_coclustering_matrix(rel_data['cluster'], out_file_cocl)
 
 
 def get_COMPASS_files(dir_path):
@@ -385,8 +312,8 @@ def get_files(in_dir):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--input', type=str,
-        help='Input directory (output dir of sampling run).')
+    parser.add_argument('-i', '--input', type=str, nargs='+',
+        help='Input directory (output dir of sampling run) or all run files.')
     parser.add_argument('-o', '--out_file', type=str, default='',
         help='Output file. Default = <INPUT>/summary.tsv')
     parser.add_argument('-m', '--min_cells', type=int, default=[1], nargs='+',
@@ -404,5 +331,8 @@ if __name__ == '__main__':
         main(snakemake.input, snakemake.output[0], snakemake.params.min_cells)
     else:
         args = parse_args()
-        main(get_files(args.input), args.out_file, args.min_cells,
-            args.plot_groundTruth)
+        if len(args.input) == 1 and os.path.isdir(args.input[0]):
+            in_files = get_files(args.input[0])
+        else:
+            in_files = args.input
+        main(in_files, args.out_file, args.min_cells, args.plot_groundTruth)

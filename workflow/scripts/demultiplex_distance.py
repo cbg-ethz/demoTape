@@ -48,9 +48,11 @@ plt.rcParams['xtick.bottom'] = True
 
 
 class demoTape:
-    def __init__(self, in_file, cl_no, distance='manhatten'):
+    def __init__(self, in_file, cl_no, min_dbt_dist=0.05):
         self.sgt_cl_no = cl_no
         self.dbt_cl_no = int(comb(self.sgt_cl_no, 2))
+
+        self.min_dbt_dist = min_dbt_dist
 
         # Get full data
         df = pd.read_csv(in_file, index_col=[0, 1], dtype={'CHR': str})
@@ -187,7 +189,8 @@ class demoTape:
 
         # Set dbt combo dists to np.nan if their profiles are very close
         for i in dbt_combs:
-            if self.metric(self.profiles[i[0]], self.profiles[i[1]]) < 0.05:
+            if self.metric(self.profiles[i[0]], self.profiles[i[1]]) \
+                    < self.min_dbt_dist:
                 df_dbt.loc[:, [i]] = np.nan
 
         # Run until (n, 2) doublet identified or no more value to consider
@@ -220,8 +223,8 @@ class demoTape:
         self.dbt_ids = np.array(dbt_ids)
         self.dbt_map = dbt_map
 
-        self.plot_heatmap(rel_SNPs_only=True)
-        import pdb; pdb.set_trace()
+        # self.plot_heatmap(rel_SNPs_only=True)
+        # import pdb; pdb.set_trace()
 
 
     def get_cl_map(self):
@@ -405,12 +408,11 @@ class demoTape:
                     row_colors2.append('#FFFFFF')
             return row_colors1, row_colors2
 
-        r_colors = []
-        if np.unique(self.true_cl).size > 1:
-            r_colors.extend(get_row_cols(self.true_cl))
-
         _, assignment_str = self.get_cl_map()
-        r_colors.extend(get_row_cols(assignment_str))
+        if np.unique(self.true_cl).size > 1:
+            r_colors = [get_row_cols(self.true_cl), get_row_cols(assignment_str)]
+        else:
+            r_colors = get_row_cols(assignment_str)
 
         df_plot, mask = self.get_hm_data()
 
@@ -438,8 +440,9 @@ class demoTape:
             xticklabels=x_ticks,
             **self.get_cm_specifics()
         )
-
-        cm.ax_row_colors.set_xlabel('Clusters', rotation=45, fontsize=10,
+        # Dont show row dendrogram
+        cm.ax_row_dendrogram.set_visible(False) 
+        cm.ax_row_colors.set_xlabel('Clusters', fontsize=10, rotation=90,
             ha='right', va='top')
 
         cm.ax_heatmap.set_facecolor('#5B566C')
@@ -449,7 +452,7 @@ class demoTape:
         cm.ax_heatmap.set_xlabel('SNPs')
 
         cm.ax_heatmap.set_xticklabels(cm.ax_heatmap.get_xticklabels(),
-            rotation=45, fontsize=5, ha='right', va='top')
+            fontsize=5, ha='center', va='top') # rotation=45, ha='right'
 
         cm.ax_col_dendrogram.set_visible(False)
         self.apply_cm_specifics(cm)
@@ -489,8 +492,8 @@ class demoTape:
 
 
 class demoTape_reads(demoTape):
-    def __init__(self, in_file, cl_no):
-        super().__init__(in_file, cl_no)
+    def __init__(self, in_file, cl_no, min_dbt_dist=0.05):
+        super().__init__(in_file, cl_no, min_dbt_dist)
         self.prof_len = self.SNPs.size * 3
         self.rel_SNPs = self.get_relevant_SNPS()
 
@@ -503,9 +506,9 @@ class demoTape_reads(demoTape):
         # Identify SNPs that are symmetric/normal distributed: likely germline + ADO
         # Not informative for clustering
         VAF_z = np.nan_to_num(self.VAF - np.nanmean(self.VAF, axis=0), 0)
-        q_vals_z = [kstest(VAF_z[:,i], -1 * VAF_z[:,i]).pvalue * self.SNPs.size \
+        q_vals_sym = [kstest(VAF_z[:,i], -1 * VAF_z[:,i]).pvalue * self.SNPs.size \
             for i in range(self.SNPs.size)]
-        rel_SNPs = np.array([i < 0.05 for i in q_vals_z])
+        rel_SNPs = np.array([i < 0.05 for i in q_vals_sym])
 
         # Identify SNPs that are on the same read in most/all cells and remove 
         #   one of them from clustering
@@ -535,8 +538,12 @@ class demoTape_reads(demoTape):
 
 
     def get_data(self, df):
-        self.ref = df.applymap(lambda x: int(x.split(':')[0])).values.T
-        self.alt = df.applymap(lambda x: int(x.split(':')[1])).values.T
+        try:
+            self.ref = df.map(lambda x: int(x.split(':')[0])).values.T
+            self.alt = df.map(lambda x: int(x.split(':')[1])).values.T
+        except AttributeError: # Older pandas versions < 2.1.0
+            self.ref = df.applymap(lambda x: int(x.split(':')[0])).values.T
+            self.alt = df.applymap(lambda x: int(x.split(':')[1])).values.T
         self.dp = self.ref + self.alt
         VAF = (self.alt + EPSILON) / (self.dp + EPSILON)
         self.VAF = np.clip(np.where(self.dp > 0, VAF, np.nan), EPSILON,
@@ -726,8 +733,7 @@ class demoTape_reads(demoTape):
                 VAF_cl_geno = (VAF_cl >= geno_min) & (VAF_cl < geno_max)
                 avg = VAF_cl_geno.sum(axis=1).mean()
                 clonal = (VAF_cl_geno.sum(axis=0) > VAF_cl_called * 0.95).sum()
-                print(f'\tGT: {geno} - Avg./cell {avg: >4.1f}, # 95% clonal: {clonal}')
-
+                print(f'\tGT: {geno:>3} - Avg./cell {avg: >4.1f}, # 95% clonal: {clonal}')
 
 
 
@@ -735,8 +741,8 @@ class demoTape_reads(demoTape):
 
 
 class demoTape_gt(demoTape):
-    def __init__(self, in_file, cl_no, distance='manhatten'):
-        super().__init__(in_file, cl_no)
+    def __init__(self, in_file, cl_no, min_dbt_dist=0.05, distance='manhatten'):
+        super().__init__(in_file, cl_no, min_dbt_dist)
         self.prof_len = self.SNPs.size
         self.distance = distance
         if self.distance == 'manhatten':
@@ -751,7 +757,10 @@ class demoTape_gt(demoTape):
 
     def get_data(self, df):
         # Get genotype data
-        self.gt = df.applymap(lambda x: float(x.split(':')[2])).values.T
+        try:
+            self.gt = df.map(lambda x: float(x.split(':')[2])).values.T
+        except AttributeError: # Older pandas versions < 2.1.0
+            self.gt = df.applymap(lambda x: float(x.split(':')[2])).values.T
         self.gt[self.gt == 3] = np.nan
 
 
@@ -899,14 +908,14 @@ def main(args):
 
     for in_file in in_files:
         if args.metric == 'reads':
-            dt = demoTape_reads(in_file, args.clusters)
+            dt = demoTape_reads(in_file, args.clusters, args.minDoubletDist)
         else:
-            dt = demoTape_gt(in_file, args.clusters, args.metric)
+            dt = demoTape_gt(in_file, args.clusters, args.minDoubletDist,
+                args.metric)
 
         dt.demultiplex()
-        if args.output:
-            args.output = os.path.splitext(args.output)[0]
-        else:
+
+        if not args.output:
             args.output = os.path.splitext(in_file)[0]
 
         dt.safe_results(args.output)
@@ -917,7 +926,8 @@ def main(args):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description='Genotype-based demultiplexing of <N> sn/sc-DNA-seq samples')
     parser.add_argument('-i', '--input', type=str, nargs='+',
         help='Input _variants.csv file(s).')
     parser.add_argument('-o', '--output', type=str, default='',
@@ -927,10 +937,14 @@ def parse_args():
     parser.add_argument('-m', '--metric', type=str, default='reads',
         choices=['reads', 'manhatten', 'euclidean'],
         help='Which data/distance to use for demultiplexing. Default = reads.')
+    parser.add_argument('-mdd', '--minDoubletDist', type=float, default=0.05,
+        help='Hyperparameter for doublet cluster identification: ' \
+            'minimal required distance between two clusters to be considered as ' \
+            'patient/sample clusters. Default = 0.05.')
 
     plotting = parser.add_argument_group('plotting')
     plotting.add_argument('-op', '--output_plot', action='store_true',
-        help='Output file for heatmap with dendrogram to "<INPUT>.hm.png".')
+        help=f'If set, save heatmap to "<INPUT>.heatmap.{FILE_EXT}".')
     plotting.add_argument('-sp', '--show_plot', action='store_true',
         help='Show heatmap with dendrogram at stdout.')
 
