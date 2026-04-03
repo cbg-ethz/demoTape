@@ -1,7 +1,7 @@
 # DemoTape
-## Computational demultiplexing of targeted single-cell sequencing (tapestri) data
+## Computational demultiplexing of targeted single-cell DNA sequencing data
 
-DemoTape is a computational demultiplexing method for targeted single-cell DNA sequencing (scDNA-seq) data, namely MissiobIo Tapestri data, based on a distance metric between individual cells at single-nucleotide polymorphisms loci. 
+DemoTape is a computational demultiplexing method for targeted single-cell DNA sequencing (scDNA-seq) data, namely MissioBio Tapestri data, based on a distance metric between individual cells at single-nucleotide polymorphisms loci. 
 
 The corresponding preprint can be found [here](https://www.biorxiv.org/content/10.1101/2024.12.06.627152v1).
 
@@ -54,7 +54,7 @@ snakemake
 According to the running environment (local/HPC), the `executor` needs to be adjusted.
 
 
-### Config 
+##### Config 
 In the [config file](configs/MS1_analysis.yaml), the following variables need to be specified:
 ```
 analysis:
@@ -72,7 +72,7 @@ The Tapestri panel file can be annotated (i.e., gene names assigned to loci) via
 
 Additionally, to run downstream analysis with [BnpC](https://github.com/cbg-ethz/BnpC) or [COMPASS](https://github.com/cbg-ethz/compass), the corresponding software needs to be downloaded and the py/exe files. specified
 
-## Simulations
+### Simulations
 
 To run the simulation pipeline, execute:
 ```bash
