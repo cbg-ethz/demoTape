@@ -54,7 +54,7 @@ if POOLED:
             out_base = os.path.join(OUT_DIR, f'{DNA_PREFIX}.demoTape')
         shell:
             """
-            python {SCRIPT_DIR}/demultiplex_distance.py \
+            python {SCRIPT_DIR}/run_DemoTape.py \
                 -i {input} \
                 -o {params.out_base} \
                 -n {POOLED_SAMPLES} \

@@ -4,9 +4,9 @@ analysis:
     output-dir: <OUTPUT_DIR>
     samples: 3
   general:
-    gene_annotation: <RESOURCES_DIR>/gencode.v19.annotation.cytoBand.tsv
-    panel_annotation: <RESOURCES_DIR>/<ANNOTATED_TAPESTRI_PANEL>.bed
-    dbsnp: <RESOURCES_DIR>/hg19/ado_db_files/trim_dbsnp153_0.01.txt
+    gene_annotation: resources/gencode.v19.annotation.cytoBand.tsv
+    panel_annotation: resources/<ANNOTATED_TAPESTRI_PANEL>.bed
+    dbsnp: resources/hg19/ado_db_files/trim_dbsnp153_0.01.txt
 
   algorithms:
     runs: 10
@@ -28,7 +28,7 @@ analysis:
 
     SCG:
       run: True
-      wrapper_exe: MINCEDTAPESTRI_DIR>/sandbox/SCG_wrapper.py
+      wrapper_exe: sandbox/SCG_wrapper.py
       chain_length: 50000
 
 output:

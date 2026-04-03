@@ -99,7 +99,7 @@ rule demultiplexing_demoTape:
         sample_no = len(LOOM_FILES)
     shell:
         """
-        python {SCRIPT_DIR}/demultiplex_distance.py \
+        python {SCRIPT_DIR}/run_DemoTape.py \
             -i {input} \
             -o {params.out_base} \
             -n {params.sample_no}
