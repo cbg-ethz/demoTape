@@ -3,6 +3,7 @@
 import argparse
 import os
 import re
+from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -28,15 +29,17 @@ ALG_MAP = {
     'Euclidean': 'demoTape',
     'souporcell': 'souporcell',
     'demoTape': 'demoTape',
-    'vireo': 'Vireo'
+    'vireo': 'Vireo',
+    'doubletD': 'doubletD'
 }
 PANELS = [f'{i}' for i in map(chr, range(65, 91))] # 97, 123 for small
-COLORS = {
+COLORS = OrderedDict({
     'demoTape': '#F24C3D',
     'scSplit': '#F2BE22',
     'souporcell': '#22A699',
     'vireo': '#325FB0',
-}
+    'doubletD': '#C7327E'
+})
 METRIC = 'v_measure'
 
 MARGINS = {
@@ -75,18 +78,25 @@ def main(in_file, out_file):
     df = pd.read_csv(in_file, sep='\t')
     df['mixing_id'] = df['mixing_ratio'].map(MR_MAP)
 
-    if out_file:
-        out_raw, f_fmt = os.path.splitext(out_file)
-    else:
-        out_raw, f_fmt = os.path.splitext(in_file)
-    if f_fmt not in ('.pdf', '.png', '.jpg', '.jpeg', '.svg'):
-        f_fmt = '.png'
+    for depth, dp_df in df.groupby('depth_downsample', sort=False):
+        
+        if out_file:
+            out_raw, f_fmt = os.path.splitext(out_file)
+        else:
+            out_raw, f_fmt = os.path.splitext(in_file)
+        if f_fmt not in ('.pdf', '.png', '.jpg', '.jpeg', '.svg'):
+            f_fmt = '.png'
 
-    acc_MR_out = f'{out_raw}{f_fmt}'
-    plot_accuracy_MR(df, acc_MR_out)
+        if depth < 1:
+            acc_MR_out = f'{out_raw}_dp{depth}{f_fmt}'
+            acc_MR_alg_out = f'{out_raw}_algorithms_dp{depth}{f_fmt}'
+        else:
+            acc_MR_out = f'{out_raw}{f_fmt}'
+            acc_MR_alg_out = f'{out_raw}_algorithms{f_fmt}'
 
-    # acc_MR_alg_out = f'{out_raw}_algorithms{f_fmt}'
-    # plot_accuracy_MR_alg(df, acc_MR_alg_out)
+        plot_accuracy_MR(dp_df, acc_MR_out)
+        # import pdb; pdb.set_trace()
+        # plot_accuracy_MR_alg(dp_df, acc_MR_alg_out)
 
 
 def rename_mixing(x):
@@ -120,7 +130,7 @@ def plot_accuracy_MR(df, out_file):
                 x='doublet_rate_str',
                 y=METRIC,
                 hue=hue_id,
-                hue_order=sorted(df_plot[hue_id].unique()),
+                hue_order=COLORS.keys(),
                 palette=COLORS,
                 ax=ax,
                 fliersize=2,
@@ -132,7 +142,7 @@ def plot_accuracy_MR(df, out_file):
                 x='doublet_rate_str',
                 y=METRIC,
                 hue=hue_id,
-                hue_order=sorted(df_plot[hue_id].unique()),
+                hue_order=COLORS.keys(),
                 palette=COLORS,
                 ax=ax,
                 linewidth=1,
@@ -141,8 +151,12 @@ def plot_accuracy_MR(df, out_file):
                 size=6,
                 dodge=True)
 
-            ax.set_ylim((0.45, 1))
-            ax.set_yticks([0.5, 0.6, 0.7, 0.8, 0.9, 1])
+            if df['depth_downsample'].unique()[0] == 1:
+                ax.set_ylim((0.35, 1))
+                ax.set_yticks([0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1])
+            else:
+                ax.set_ylim((0, 1))
+                ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1])
 
             # Plot linebreak
             # d = 0.02
@@ -191,7 +205,7 @@ def plot_accuracy_MR(df, out_file):
 
     plt.subplots_adjust(**MARGINS)
     if out_file:
-        fig.savefig(out_file, dpi=300)
+        fig.savefig(out_file, dpi=150)
     else:
         plt.show()
 

@@ -1,11 +1,11 @@
 analysis:
   specific:
     input-dir: <INPUT_DIR>
-    output-dir: /cluster/work/bewi/ngs/projects/demoTape/mixed_analysis
+    output-dir: <OUTPUT_DIR>
     samples: 3
   general:
     gene_annotation: <RESOURCES_DIR>/gencode.v19.annotation.cytoBand.tsv
-    panel_annotation: <RESOURCES_DIR>/3848_annotated.bed
+    panel_annotation: <RESOURCES_DIR>/<ANNOTATED_TAPESTRI_PANEL>.bed
     dbsnp: <RESOURCES_DIR>/hg19/ado_db_files/trim_dbsnp153_0.01.txt
 
   algorithms:
@@ -20,19 +20,16 @@ analysis:
       CNV: 0
 
     BnpC:
-      run: False
+      run: True
       exe: <BNPC_DIR>/run_BnpC.py
       chains: 4
       chain_length: 500
       runtime: 180
 
     SCG:
-      run: False
+      run: True
       wrapper_exe: MINCEDTAPESTRI_DIR>/sandbox/SCG_wrapper.py
       chain_length: 50000
 
 output:
   prefix: <PREFIX>
-
-tapestri:
-  output-folder: <OUTPUT_DIR>

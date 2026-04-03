@@ -6,7 +6,8 @@ dependencies:
   - graphviz
   - pip:
     - loompy
-    - pandas==2.1.4
+    - pandas
     - scipy
     - seaborn[stats]
     - scikit-learn
+    - fastcluster

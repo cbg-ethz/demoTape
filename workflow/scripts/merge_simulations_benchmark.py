@@ -2,8 +2,15 @@
 
 import argparse
 import os
+import re
 
 import pandas as pd
+
+
+FRAC_PATTERN = re.compile(r'/([\d\.]+-[\d\.]+-[\d\.]+)')
+DBT_PATTERN = re.compile(r'-d(0\.\d{2})')
+DEPTH_PATTERN = re.compile(r'-dp(0\.\d{2})')
+
 
 def main(in_files, out_file):
     if not out_file:
@@ -21,12 +28,18 @@ def main(in_files, out_file):
         file_split = os.path.split(in_file)[1].split('.')
         rep, alg = file_split[-3: -1]
         frac_str = '.'.join(file_split[:-3])
-        frac, doublet = frac_str.split('-d')
+        frac = FRAC_PATTERN.search(in_file).group(1)
+        doublet = DBT_PATTERN.search(in_file).group(1)
+        try:
+            depth = DEPTH_PATTERN.search(in_file).group(1)
+        except (KeyError, AttributeError):
+            depth = 1
 
         df_new = pd.read_csv(in_file, sep='\t')
         df_new['algorithm'] = alg
         df_new['mixing_ratio'] = frac
         df_new['doublet_rate'] = doublet
+        df_new['depth_downsample'] = depth
         df_new['replicate'] = rep
 
         df = pd.concat([df, df_new])

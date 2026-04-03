@@ -1,0 +1,8 @@
+name: doubletD
+channels:
+  - r
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - doubletd

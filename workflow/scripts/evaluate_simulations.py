@@ -10,14 +10,21 @@ from sklearn.metrics.cluster import v_measure_score
 
 
 
-def replace_doublets(df, value='-1'):
-    return np.where(np.char.find(df.astype(str), '+') != -1, '-1', df.astype(str))
+def replace_doublets(arr, value='-1'):
+    return np.where(np.char.find(arr.astype(str), '+') != -1,
+        value, arr.astype(str))
 
 
 def obtain_assignment_results(pred_all, true_all):
     # Set doublets to -1 cluster
     true_all = replace_doublets(true_all)
-    pred_all = replace_doublets(pred_all)
+    # DoubletD special case: doublet cl = -1, singlet = 0
+    if 'singlet' in pred_all:
+        true_all = np.where(true_all == '-1', '-1', '0')
+        pred_all = np.where(pred_all == 'doublet', '-1', '0')    
+    else:
+        pred_all = replace_doublets(pred_all)
+    
     return v_measure_score(true_all, pred_all)
 
 
@@ -30,24 +37,31 @@ def get_predictions_vireo(df):
     dbt = (df['donor_id'] == 'doublet').values
 
     pred_all = df['best_singlet'].where(sgt, df['best_doublet']).values
-    # Add 'unassigned' predctions
+    # Add 'unassigned' predictions
     pred_all[(df['donor_id'] == 'unassigned').values] = '-2'
     true_all = np.array(
-        ['+'.join(sorted(re.findall('.pat(\d+)', i))) for i in df.index.values])
+        ['+'.join(sorted(re.findall(r'.pat(\d+)', i))) for i in df.index.values])
     return pred_all, true_all
 
 
 def get_predictions_demoTape(df):
     pred_all = df.loc['Cluster'].values.astype(str)
     true_all = np.array(
-        ['+'.join(sorted(re.findall('.pat(\d+)', i))) for i in df.columns.values])
+        ['+'.join(sorted(re.findall(r'.pat(\d+)', i))) for i in df.columns.values])
     return pred_all, true_all
 
 
 def get_predictions_scSplit(df):
+    # Wrong axis pd.concat
+    if sum([i.startswith('Cluster') for i in df.columns]) > 1:
+        data = []
+        for i in range(0, df.shape[1] + 1, 2):
+            data.append(df.reset_index().iloc[:,i:i+2].dropna()
+                .rename(columns=lambda x: x.split('.')[0]))
+        df = pd.concat(data).set_index('Barcode')
     pred_all = df['Cluster'].apply(lambda x: x.split('-')[-1]).values
     true_all = np.array(
-        ['+'.join(re.findall('.pat(\d+)', i)) for i in df.index.values])
+        ['+'.join(re.findall(r'.pat(\d+)', i)) for i in df.index.values])
     return pred_all, true_all
 
 
@@ -56,7 +70,13 @@ def get_predictions_soup(df):
         .apply(lambda x: x if not '/' in x else '+'.join(sorted(x.split('/')))) \
         .values
     true_all = np.array(
-        ['+'.join(sorted(re.findall('.pat(\d+)', i))) for i in df.index.values])
+        ['+'.join(sorted(re.findall(r'.pat(\d+)', i))) for i in df.index.values])
+    return pred_all, true_all
+
+def get_predictions_doubletD(df):
+    pred_all = df['prediction'].values
+    true_all = np.array(
+        ['+'.join(sorted(re.findall(r'.pat(\d+)', i))) for i in df.index.values])
     return pred_all, true_all
 
 
@@ -75,11 +95,14 @@ def main(in_files, out_file):
         elif 'vireo' in in_file:
             name = 'vireo'
             pred_all, true_all = get_predictions_vireo(df_new)
+        elif 'doubletD' in in_file:
+            name = 'doubletD'
+            pred_all, true_all = get_predictions_doubletD(df_new)
         else:
             name = 'demoTape'
             pred_all, true_all = get_predictions_demoTape(df_new)
         try:
-            rep = int(re.search('/rep(\d+)', in_file).group(1))
+            rep = int(re.search(r'/rep(\d+)', in_file).group(1))
         except:
             rep = -1
         res = obtain_assignment_results(pred_all, true_all)

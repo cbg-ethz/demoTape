@@ -1,8 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2.7
 
 import argparse
 from datetime import datetime
 import os
+from shutil import copy2
 import subprocess
 import sys
 
@@ -11,19 +12,21 @@ import h5py
 import numpy as np
 import pandas as pd
 
+
 # ------------------------------------------------------------------------------
 # INIT AND OUTPUT FUNCTIONS
 # ------------------------------------------------------------------------------
 
 def preprocess_SCG(args):
     if not args.output:
-        res_dir = f'{datetime.now():%Y%m%d_%H:%M:%S}_SCG'
+        res_dir = '{:%Y%m%d_%H:%M:%S}_SCG'.format(datetime.now())
         args.output = os.path.join(os.path.dirname(args.input), res_dir)
 
     if not os.path.exists(args.output):
         os.makedirs(args.output)
 
-    data_out_file = os.path.join(args.output, f'{os.path.basename(args.input)}.gz')
+    data_out_file = os.path.join(args.output,
+        '{}.gz'.format(os.path.basename(args.input)))
     data = pd.read_csv(args.input, sep=',', index_col=0)
 
     data.T.to_csv(data_out_file, index_label='cell_id', sep='\t')
@@ -61,11 +64,11 @@ def preprocess_SCG(args):
 
 def run_SCG(args):
     hdf_file = os.path.join(args.output, 'scg_run.hdf')
-    cmmd = f'scg fit --in-file {args.config_file} --out-file {hdf_file} ' \
-        f'--max-iters {args.steps}'
+    cmmd = 'scg fit --in-file {} --out-file {} --max-iters {}' \
+        .format(args.config_file, hdf_file, args.steps)
     if not args.silent:
-        print(f'output directory:\n{args.output}')
-        print(f'\nShell command:\n{cmmd}\n')
+        print('output directory:\n{}'.format(args.output))
+        print('\nShell command:\n{}\n'.format(cmmd))
 
     scg = subprocess.Popen(cmmd,
         shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -75,7 +78,8 @@ def run_SCG(args):
 
     if not stdout or str(stdout).split('\\n')[-2] != 'Converged':
         print('\nSCG didnt converge:')
-        [print(i) for i in str(stderr).split('\\n')]
+        for i in str(stderr).split('\\n'):
+            print(i)
         raise RuntimeError('SCG Error')
 
     if not args.silent:
@@ -121,71 +125,79 @@ def load_results_dfs(file_name):
         cell_df['cluster_id'].unique(), np.arange(cell_df['cluster_id'].nunique())
     ))
 
-    cell_df["cluster_id"] = cell_df["cluster_id"].map(cluster_map)
-    cell_df = cell_df.sort_values(by="cluster_id")
+    cell_df['cluster_id'] = cell_df['cluster_id'].map(cluster_map)
+    cell_df = cell_df.sort_values(by='cluster_id')
 
-    cluster_df = cluster_df[cluster_df["cluster_id"].isin(cluster_map.keys())]
-    cluster_df["cluster_id"] = cluster_df["cluster_id"].map(cluster_map)
-    cluster_df = cluster_df.sort_values(by=["cluster_id", "event_id"])
+    cluster_df = cluster_df[cluster_df['cluster_id'].isin(cluster_map.keys())]
+    cluster_df['cluster_id'] = cluster_df['cluster_id'].map(cluster_map)
+    cluster_df = cluster_df.sort_values(by=['cluster_id', 'event_id'])
 
     return cell_df, cluster_df
 
 
 def load_cell_df(file_name):
-    with h5py.File(file_name, 'r') as fh:
-        model = fh["meta"].attrs["model"]
-        cell_ids = fh["/data/cell_ids"][()]
+    temp_h5_file = '{}.{:%M:%S.%f}.cell.temp'.format(file_name, datetime.now())
+    copy2(file_name, temp_h5_file)
 
-        Z = fh["/var_params/Z"][()]
-        if model == "doublet":
-            K = fh["meta"].attrs["K"]
-            Y = fh["/var_params/Y"][()]
+    with h5py.File(temp_h5_file, 'r') as fh:
+        model = fh['meta'].attrs['model']
+        cell_ids = fh['/data/cell_ids'][()]
+
+        Z = fh['/var_params/Z'][()]
+        if model == 'doublet':
+            K = fh['meta'].attrs['K']
+            Y = fh['/var_params/Y'][()]
             # Keep only the columns for single clusters
             Z = Z[:,:K]
             Z = Z / Z.sum(axis=1)[:, np.newaxis]
 
             df = pd.DataFrame({
-                "cluster_id": Z.argmax(axis=1),
-                "cluster_prob": Z.max(axis=1),
-                "doublet_prob": Y[1]
+                'cluster_id': Z.argmax(axis=1),
+                'cluster_prob': Z.max(axis=1),
+                'doublet_prob': Y[1]
             })
         else:
             df = pd.DataFrame({
-                "cluster_id": Z.argmax(axis=1),
-                "cluster_prob": Z.max(axis=1)
+                'cluster_id': Z.argmax(axis=1),
+                'cluster_prob': Z.max(axis=1)
             })
 
-        df.insert(0, "cell_id", cell_ids)
+        df.insert(0, 'cell_id', cell_ids)
 
+    os.remove(temp_h5_file)
     return df
 
 
 def load_cluster_df(file_name):
-    with h5py.File(file_name, 'r') as fh:
-        data_types = list(fh["/data/event_ids"].keys())
+    temp_h5_file = '{}.{:%M:%S.%f}.cluster.temp'.format(file_name, datetime.now())
+    copy2(file_name, temp_h5_file)
+
+    with h5py.File(temp_h5_file, 'r') as fh:
+        data_types = list(fh['/data/event_ids'].keys())
 
         df = []
         for dt in data_types:
-            event_ids = fh[f"/data/event_ids/{dt}"][()]
+            event_ids = fh['/data/event_ids/{}'.format(dt)][()]
 
-            G = fh[f"/var_params/G/{dt}"][()]
+            G = fh['/var_params/G/{}'.format(dt)][()]
             # MAP assignments
             G_idx = G.argmax(axis=0)
             G_idx = pd.DataFrame(G_idx, columns=event_ids)
             G_idx = G_idx.stack().reset_index()
-            G_idx.columns = "cluster_id", "event_id", "genotype"
+            G_idx.columns = 'cluster_id', 'event_id', 'genotype'
 
             # Probs
             G_prob = G.max(axis=0)
             G_prob = pd.DataFrame(G_prob, columns=event_ids)
             G_prob = G_prob.stack().reset_index()
-            G_prob.columns = "cluster_id", "event_id", "genotype_prob"
+            G_prob.columns = 'cluster_id', 'event_id', 'genotype_prob'
 
             # Merge
-            dt_df = pd.merge(G_idx, G_prob, on=["cluster_id", "event_id"])
-            dt_df["data_type"] = dt
+            dt_df = pd.merge(G_idx, G_prob, on=['cluster_id', 'event_id'])
+            dt_df['data_type'] = dt
             df.append(dt_df)
 
+    os.remove(temp_h5_file)
     return pd.concat(df)
 
 
@@ -199,7 +211,7 @@ def parse_args():
            'elements need to be separated by a whitespace or tabulator.'
     )
     parser.add_argument('-o', '--output', type=str, default='',
-        help='Path to the output directory. Default = "<DATA_DIR>/<TIMESTAMP>_SCG".'
+        help='Path to the output directory. Default = <DATA_DIR>/<TIMESTAMP>_SCG.'
     )
     parser.add_argument('-k', '--clusters', type=int, default=50,
         help='Maximum number of clusters. Default = 50.'
@@ -214,7 +226,7 @@ def parse_args():
         help='Print status massages to stdout. Default = True'
     )
     parser.add_argument('-r', '--results', type=str, default='',
-        help='Only postprocess results dir.'
+        help='Postprocess results dir.'
     )
     args = parser.parse_args()
     return args

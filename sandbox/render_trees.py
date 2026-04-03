@@ -6,20 +6,36 @@ import re
 import subprocess
 import tempfile
 
-from tqdm import tqdm
-
 CHROM = {**{str(i): i for i in range(1, 23, 1)}, **{'X': 23, 'Y': 24}}
-COLORS = {'cl0': '#FF7575', 'cl1': '#84B5DE', 'cl2': '#AAE3A7',
-    'S3': '#e41a1c', 'S1': '#377eb8', 'S2': '#4daf4a'}
 
-COLORS = {'cl0': '#e41a1c', 'cl1': '#377eb8', 'cl2': '#4daf4a',
-    'S3': '#FF7575', 'S1': '#84B5DE', 'S2': '#AAE3A7'}
+SAMPLE_MAP = {
+    'GFB-4397_GFB-4401': 'S1',
+    'GFB-4395_GFB-4399': 'S2',
+    'GFB-4396_GFB-4400': 'S3',
+    'GFB-4398_GFB-4402_0': 'MS1:S3',
+    'GFB-4398_GFB-4402_1': 'MS1:S1',
+    'GFB-4398_GFB-4402_2': 'MS1:S2'
+}
+COLOR_MAP = {
+    'S3': '#5FCA6C',
+    'MS1:S3': '#0d821b',
+    'S1': '#6580E2',
+    'MS1:S1': '#0e2fa7',
+    'S2': '#ffe119',
+    'MS1:S2': '#a69100',
+    'MS1': '#6F41D9',
+}
 
+
+EVENT_WIDTH = 0.5
+CELL_WIDTH = 0.75
+
+CNV_PATTERN = r'<B>CNV([\+-]\d+) ([\w:{0,1}-]+):*([REF,ALT]*) \(chr([XY\d]{1,2})\)</B>'
 
 class Tree:
     STYLE = '[color=dimgray fontsize=24 fontcolor=black fontname=Helvetica penwidth=5]'
     GV = 'digraph G{{\nnode {style};\n{mut_edges}\n{mut_nodes}\n{cell_edges}\n{cell_nodes}\n}}'
-
+    SEP = '<br/>'
 
     def __init__(self, tree_file):
         self.nodes = {}
@@ -53,9 +69,9 @@ class Tree:
         style = line[break_idx:].rstrip(';')
 
         if 'style' in style:
-            self.nodes[name] = CellNode(name, style)
+            self.nodes[name] = CellNode(name, style, self.SEP)
         else:
-            self.nodes[name] = EventNode(name, style)
+            self.nodes[name] = EventNode(name, style, self.SEP)
 
 
     def _add_edge(self, line):
@@ -83,6 +99,51 @@ class Tree:
 
         self.nodes = {i.name: i for i in self.get_nodes()}
 
+
+    def _adjust_cell_nodes(self):
+        for node in self.get_nodes('event'):
+            cell_nodes = [i.end for i in self.get_downstream_edges(node) \
+                if isinstance(i.end, CellNode)]
+            if len(cell_nodes) > 1:
+                for cell_node in cell_nodes[1:]:
+                    cell_nodes[0].add_cells(cell_node.get_cells())
+                    cell_nodes[0].add_percentage(cell_node.get_percentage())
+                
+                for rmv_node in cell_nodes[1:]:
+                    upstr_edge = self.get_upstream_edge(rmv_node)
+                    self.edges.remove(upstr_edge)
+                    self.nodes.pop(rmv_node.name)
+
+
+    def remove_loci(self, filter_file):
+        with open(filter_file, 'r') as f:
+            loci = f.read().strip().split(',')
+
+        for locus in loci:
+            chrom, pos, _, _ = locus.split('_')
+            remove_nodes = []
+            for node in self.get_nodes('event'):
+                remove = []
+                for event in node.get_events():
+                    if event.chrom == chrom and event.pos == int(pos):
+                        remove.append(event)
+                if remove:
+                    node.remove_events(remove)
+                    if len(node) == 0:
+                        remove_nodes.append(node.name)
+                        upstr_edge = self.get_upstream_edge(node)
+                        self.edges.remove(upstr_edge)
+
+                        p_node = upstr_edge.start
+                        for dstr_edge in self.get_downstream_edges(node):
+                            dstr_edge.start = p_node
+                        
+            for remove_node in remove_nodes:
+                self.nodes.pop(remove_node)
+
+            self._adjust_cell_nodes()
+            self._adjust_indices()
+           
 
     def remove_sparse_nodes(self, threshold=1):
         # Repeat until all tip nodes have > threshold cells assigned
@@ -253,37 +314,49 @@ class Tree:
         return is_tip
 
 
-    def to_gv(self, out_file):
+    def to_gv(self, out_file, structure):
+        if structure:
+            gv_str = self.get_structure_str()
+        else:
+            gv_str = str(self)
+
         with open(out_file, 'w') as f:
-            f.write(str(self))
+            f.write(gv_str)
 
 
-    def render(self, out_file='', file_type='png', overwrite=False):
+    def render(self, out_file='', file_type='png', overwrite=False,
+                structure=False):
         if not out_file:
             out_file = f'{os.path.splitext(self.file)[0]}.{file_type}'
 
-        if os.path.exists(out_file) and overwrite:
+        if os.path.exists(out_file) and not overwrite:
             print(f'File existing: {out_file}')
             return
 
         tmp_tree_file = tempfile.NamedTemporaryFile(delete=False)
-        self.to_gv(tmp_tree_file.name)
-
-
+        self.to_gv(tmp_tree_file.name, structure)
 
         cmmd = f'dot -T{file_type} {tmp_tree_file.name} -o {out_file}'
-        dot = subprocess.Popen(cmmd,
-            shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        stdout, stderr = dot.communicate()
-        dot.wait()
+        dot = subprocess.run(cmmd, shell=True, capture_output=True)
         tmp_tree_file.close()
 
-        if stderr or stdout:
-            print(f'\nFAILED! Command: {cmmd}:\n')
-            [print(i) for i in str(stdout).split('\\n')]
-            [print(i) for i in str(stderr).split('\\n')]
-            raise RuntimeError()
+        if dot.returncode != 0:
+            [print(i) for i in str(dot.stderr).split('\\n')]
+            [print(i) for i in str(dot.stdout).split('\\n')]
+            raise subprocess.CalledProcessError(dot.returncode, cmmd)
+
+
+    def get_structure_str(self):
+        mut_nodes = '\n'.join([i.get_structure() for i in self.get_nodes('event')])
+        mut_edges = '\n'.join([str(i) for i in self.get_edges('event')])
+        cell_nodes = '\n'.join([i.get_structure() for i in self.get_nodes('cell')])
+        cell_edges = '\n'.join([str(i) for i in self.get_edges('cell')])
+        return Tree.GV.format(
+            style=Tree.STYLE,
+            mut_nodes=mut_nodes,
+            mut_edges=mut_edges,
+            cell_nodes=cell_nodes,
+            cell_edges=cell_edges)
 
 
     def __str__(self):
@@ -300,9 +373,10 @@ class Tree:
 
 
 class Node:
-    def __init__(self, name, style, root=True):
+    def __init__(self, name, style, sep, root=True):
         self.name = name
         self.style = style
+        self.sep = sep
         self.is_root = root
         self.sample_id = -1
 
@@ -324,27 +398,39 @@ class Node:
 
 
 class EventNode(Node):
-    def __init__(self, name, style, root=True):
-        super().__init__(name, style, root)
-        self.events = {'SNV': [], 'LOH': []}
+    def __init__(self, name, style, sep, root=True):
+        super().__init__(name, style, sep, root)
+        self.events = {'SNV': [], 'LOH': [], 'CNV': []}
         events = style[8:-7].split('<br/>')
         for event in events:
             if event == 'MERGE ROOT' or event == '':
                 continue
             if event.startswith('<B>'):
-                # Example: <B>LOH AMPL327913(chr8_59739333-ALT)</B>
-
-                ampl = event.split('(')[0].split('LOH ')[1]
-                chrom = event.split('(')[1].split('_')[0][3:]
-                pos = {}
-                for LOH_event in event[:-5].split('(')[1].split(','):
-                    pos_id = int(LOH_event.split('-')[0].split('_')[1])
-                    pos[pos_id] = LOH_event.split('-')[1]
-                self.events['LOH'].append(LOH(ampl, chrom, pos))
+                if 'CNV' in event:
+                    # Example: <B>CNV+1 TSC2:REF,REF,REF (chr16)</B>
+                    details = re.search(CNV_PATTERN, event)
+                    try:
+                        var = details.group(1)
+                    except:
+                        import pdb; pdb.set_trace()
+                    region = details.group(2)
+                    ampl_gt = details.group(3).split(',')
+                    chrom = details.group(4)
+                    self.events['CNV'].append(CNV(region, chrom, var, ampl_gt))
+                else:
+                    # Example: <B>LOH AMPL327913(chr8_59739333-ALT)</B>
+                    # Example: <B>CNLOH AMPL401335(chr14_66028391-ALT,chr14_66028505-REF)</B>
+                    ampl = event.split('(')[0].split('LOH ')[1]
+                    chrom = event.split('(')[1].split('_')[0][3:]
+                    pos = {}
+                    for LOH_event in event[:-5].split('(')[1].split(','):
+                        pos_id = int(LOH_event.split('-')[0].split('_')[1])
+                        pos[pos_id] = LOH_event.split('-')[1]
+                    self.events['LOH'].append(LOH(ampl, chrom, pos))
             else:
                 # Example: AMPL278226(chr3_31712170)
                 try:
-                    SNV_id = re.search('.*\((chr[0-9XY]+_\d+)\)', event).group(1)
+                    SNV_id = re.search(r'.*\((chr[\dXY]+_\d+)\)', event).group(1)
                 except (AttributeError, TypeError):
                     print(f'!WARNING: mutation event "{event}" does not contain ' \
                         ' position (format: chr<CHR>_<POS>)')
@@ -364,8 +450,10 @@ class EventNode(Node):
             return self.events['SNV']
         elif e_type == 'LOH':
             return self.events['LOH']
+        elif e_type == 'CNV':
+            return self.events['CNV']
         else:
-            return self.events['SNV'] + self.events['LOH']
+            return self.events['SNV'] + self.events['LOH'] + self.events['CNV']
 
 
     def remove_events(self, del_events):
@@ -380,11 +468,27 @@ class EventNode(Node):
                 self.events['SNV'].append(event)
             elif isinstance(event, LOH):
                 self.events['LOH'].append(event)
+            elif isinstance(event, CNV):
+                self.events['CNV'].append(event)
             else:
                 raise TypeError(f'Unknown event: {type(event)}')
 
 
-    def __str__(self, sep='<br/>'):
+    def get_structure(self):
+        label_str = f'SNVs: {len(self.events["SNV"])}\\n' \
+            f'LOHs: {len(self.events["LOH"])}\\n' \
+            f'CNVs: {len(self.events["CNV"])}'
+
+        size = sum([len(i) for _, i in self.events.items()]) * EVENT_WIDTH
+
+        return f'{self.name} [label="{label_str}" width={size} height={size}];'
+
+
+    def __len__(self):
+        return len([j for i in self.events.values() for j in i])
+
+
+    def __str__(self):
         label_str = ''
         het_SNVs = [(i.chrom, i.pos, i.ampl) for i in self.get_events('SNV')]
         red_SNVs = [] # wt -> het SNP -> LOH of ALT -> wt
@@ -408,20 +512,22 @@ class EventNode(Node):
                     continue
                 elif isinstance(event, LOH) \
                         and (event.chrom, list(event.pos.keys())[0]) in red_SNVs:
-
                     continue
-                label_str += f'{str(event)}{sep}'
+                label_str += f'{str(event)}{self.sep}'
 
         return f'{self.name} [label=<{label_str}>];'
 
 
 class CellNode(Node):
-    def __init__(self, name, style):
-        super().__init__(name, style, False)
-        self.cells = int(re.search('label="(\d+) cells', style).group(1))
-        self.perc = int(re.search('\\\\n(\d+)\\\\%', style).group(1))
+    def __init__(self, name, style, sep):
+        super().__init__(name, style, sep, False)
+        self.cells = int(re.search(r'label="(\d+) cells', style).group(1))
+        if self.cells > 0:
+            self.perc = int(re.search(r'\\n(\d+)\\%', style).group(1))
+        else:
+            self.perc = 0
         self.cell_style = style.split('"')[-1].strip(' []')
-        self.color = re.search('color=(\w+)', self.cell_style).group(1)
+        self.color = re.search(r'color=(\w+)', self.cell_style).group(1)
         self.cell_style = self.cell_style.replace(self.color, f'"{self.color}"')
 
 
@@ -447,11 +553,20 @@ class CellNode(Node):
 
     def set_color(self, new_color):
         self.cell_style = self.cell_style.replace(self.color, new_color)
+        if new_color == '#0e2fa7':
+            self.cell_style += ' fontcolor="#FFFFFF"' 
         self.color = new_color
 
 
     def __str__(self):
         return f'{self.name} [label="{self.get_label()}" {self.cell_style}];'
+
+
+    def get_structure(self):
+        size = self.perc * CELL_WIDTH
+        style = re.sub(r'=\d\.\d+' , f'={size}', self.cell_style)
+
+        return f'{self.name} [label="{self.get_label()}" {style}];'
 
 
 class Event:
@@ -516,6 +631,29 @@ class LOH(Event):
         return pos_str.lstrip(',')
 
 
+class CNV(Event):
+    def __init__(self, region, chrom, var, ampl_gt):
+        self.region = region
+        self.chrom = chrom
+        self.variation = var
+        self.amplicon_gt = ampl_gt
+
+
+    def __lt__(self, other):
+        # SNP|LOH  Event
+        try:
+            return (CHROM[self.chrom], self.region) \
+                < (CHROM[other.chrom], other.ampl)
+        # CNV Event
+        except AttributeError:
+            return (CHROM[self.chrom], self.region) \
+                < (CHROM[other.chrom], other.region)
+
+
+    def __str__(self):
+        return f'CNV{self.variation} {self.region} (chr{self.chrom})'
+
+
 class Edge:
     def __init__(self, start, end, style):
         self.start = start
@@ -530,7 +668,7 @@ class Edge:
 class CellEdge(Edge):
     def __init__(self, start, end, style):
         super().__init__(start, end, style)
-        self.color = re.search('color=(\w+)', self.style).group(1)
+        self.color = re.search(r'color=(\w+)', self.style).group(1)
         self.style = self.style.replace(self.color, f'"{self.color}"')
 
     def set_color(self, new_color):
@@ -545,19 +683,28 @@ class EventEdge(Edge):
 
 # ------------------------------------------------------------------------------
 
+def render_tree(gv_file, args):
+    t = Tree(gv_file)
+    if args.filter:
+        t.remove_loci(gv_file)
+    t.remove_sparse_nodes(args.min_cells)
+    sample = os.path.basename(gv_file).split('.')[0]
+    if sample in SAMPLE_MAP:
+        t.set_cell_node_color(COLOR_MAP[SAMPLE_MAP[sample]])
+    t.render(overwrite=args.overwrite, structure=args.structure)
+
 
 def main(args):
-    for subdir, dirs, files in tqdm(os.walk(args.input)):
-        for file in files:
-            if not file.endswith('.gv'):
-                continue
-            file_abs = os.path.join(subdir, file)
-            t = Tree(file_abs)
-            t.remove_sparse_nodes(args.min_cells)
-            if re.search('(?<=/)cl\d$|S\d$', subdir.rstrip('/')):
-                cl_id = re.search('(?<=/)cl\d$|S\d$', subdir).group()
-                t.set_cell_node_color(COLORS[cl_id])
-            t.render(overwrite=args.overwrite)
+    if os.path.isfile(args.input):
+        render_tree(args.input, args)
+    elif os.path.isdir(args.input):
+        for subdir, dirs, files in os.walk(args.input):
+            for file in files:
+                if not file.endswith('.gv'):
+                    continue
+                render_tree(os.path.join(subdir, file), args)
+    else:
+        raise IOError(f'Cannot render file/directory {args.input}')
 
 
 def parse_args():
@@ -566,8 +713,12 @@ def parse_args():
         help='Input directory containing .gv files.')
     parser.add_argument('-mc', '--min_cells', type=float, default=1,
         help='Minimum percentage of cells for a node to be plotted. Default = 1.')
+    parser.add_argument('-s', '--structure', action='store_true', default=False,
+        help='Plot tree structure with nodes representing actual size.')
     parser.add_argument('-o', '--overwrite', action='store_true', default=False,
         help='If set, existing plots are overwritten.')
+    parser.add_argument('-f', '--filter', type=str, 
+        help='File (.csv) containing SNVs to filter .')
 
     return parser.parse_args()
 

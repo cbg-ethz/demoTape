@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
 import argparse
-from itertools import combinations
 import os
 import re
+from itertools import combinations
 
+import fastcluster
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -79,8 +80,8 @@ class demoTape:
         self.true_cl = np.array(true_cl)
 
         # Init variables
-        self.Z = np.array([])
-        self.assignment = np.array([])
+        self.Z = np.zeros((self.cells.size-1, 4), dtype=np.float32)
+        self.assignment = np.zeros(self.cells.size, dtype=int)
         self.profiles = np.array([])
         self.sgt_ids = np.array([])
         self.dbt_ids = np.array([])
@@ -913,10 +914,13 @@ def main(args):
             dt = demoTape_gt(in_file, args.clusters, args.minDoubletDist,
                 args.metric)
 
-        dt.demultiplex()
-
         if not args.output:
             args.output = os.path.splitext(in_file)[0]
+        out_dir = os.path.dirname(args.output)
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+
+        dt.demultiplex()
 
         dt.safe_results(args.output)
         if args.output_plot:

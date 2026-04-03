@@ -125,16 +125,14 @@ def main(args):
 
 
 def plot_heatmap(df, out_file, df_ca):
-    try:
-        df_plot = df.map(
-            lambda x: (int(x.split(':')[1]) + EPSILON) \
-                / (sum([int(i) for i in x.split(':')[:2]]) + EPSILON)).T
-        mask = df.map(lambda x: x.split(':')[2] == '3').T
-    except AttributeError: # Older pandas versions < 2.1.0
-        df_plot = df.applymap(
-            lambda x: (int(x.split(':')[1]) + EPSILON) \
-                / (sum([int(i) for i in x.split(':')[:2]]) + EPSILON)).T
-        mask = df.applymap(lambda x: x.split(':')[2] == '3').T
+    ref = df.T.map(lambda x: int(x.split(':')[0])).values
+    alt = df.T.map(lambda x: int(x.split(':')[1])).values
+    dp = ref + alt
+    VAF = np.clip((alt + EPSILON) / (dp + EPSILON), EPSILON, 1 - EPSILON)
+    df_plot = pd.DataFrame(VAF, index=df.columns, columns=df.index)
+
+    mask = dp == 0
+
 
     if df_ca.size > 0:
         # DemoTape assignment
@@ -189,7 +187,7 @@ def plot_heatmap(df, out_file, df_ca):
         hm.set_yticks([])
 
     hm.set_xlabel('SNPs')
-    hm.set_xticklabels(hm.get_xticklabels(), fontsize=FONTSIZE/2, va='top')
+    hm.set_xticklabels(hm.get_xticklabels(), fontsize=FONTSIZE/1.2, va='top')
 
     cm.ax_cbar.set_title('VAF', fontsize=FONTSIZE)
 

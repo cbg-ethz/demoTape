@@ -8,39 +8,39 @@ SCRIPT_DIR = os.path.join(workflow.basedir, 'scripts')
 ENV_DIR = os.path.join(workflow.basedir, 'envs')
 CONDA_PREFIX = config.get('conda_prefix', '')
 # ----- Get sample dependent input files -----
-BASE_DIR = '/home/hw/Desktop/mincedTapestri/results/run_bsse_VAF'
+BASE_DIR = '<PATH>/results/'
 OUT_DIR = f'{BASE_DIR}/Fig5'
-BASE_DEMULTI = f'{BASE_DIR}/mixed_SID3867_SID5962_SID3841'
-BASE_DEMULTI_CL = f'{BASE_DIR}/mixed_SID3867_SID5962_SID3841/analysis/GFB-4398_GFB-4402'
+BASE_DEMULTI = f'{BASE_DIR}/MS1'
+BASE_DEMULTI_CL = f'{BASE_DIR}/MS1/analysis/<MS1_PREFIX>'
 SAMPLE_DICT = {
     'S1': {
         'single': {
-            'result': f'{BASE_DIR}/SID3841/analysis/GFB-4397_GFB-4401.',
-            'loom': f'{BASE_DIR}/SID3841/SID3841.cells.loom'
+            'result': f'{BASE_DIR}/S1/analysis/<S1_PREFIX>',
+            'loom': f'{BASE_DIR}/S1/S1.cells.loom'
             },
         'demulti': {
             'result': f'{BASE_DEMULTI_CL}_1.',
-            'loom': f'{BASE_DEMULTI}/mixed_SID3867_SID5962_SID3841.cells.loom'
+            'loom': f'{BASE_DEMULTI}/MS1.cells.loom'
         }
     },
     'S2': {
         'single': {
-            'result': f'{BASE_DIR}/SID3867/analysis/GFB-4395_GFB-4399.',
-            'loom': f'{BASE_DIR}/SID3867/SID3867.cells.loom'
+            'result': f'{BASE_DIR}/S2/analysis/<S2_PREFIX>',
+            'loom': f'{BASE_DIR}/S2/S2.cells.loom'
             },
         'demulti': {
             'result': f'{BASE_DEMULTI_CL}_2.',
-            'loom': f'{BASE_DEMULTI}/mixed_SID3867_SID5962_SID3841.cells.loom'
+            'loom': f'{BASE_DEMULTI}/MS1.cells.loom'
         }
     },
     'S3': {
         'single': {
-            'result': f'{BASE_DIR}/SID5962/analysis/GFB-4396_GFB-4400.',
-            'loom': f'{BASE_DIR}/SID5962/SID5962.cells.loom'
+            'result': f'{BASE_DIR}/S3/analysis/<S3_PREFIX>',
+            'loom': f'{BASE_DIR}/S3/S3.cells.loom'
             },
         'demulti': {
             'result': f'{BASE_DEMULTI_CL}_0.',
-            'loom': f'{BASE_DEMULTI}/mixed_SID3867_SID5962_SID3841.cells.loom'
+            'loom': f'{BASE_DEMULTI}/MS1.cells.loom'
         }
     }
 }

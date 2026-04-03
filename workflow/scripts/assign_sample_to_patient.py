@@ -39,7 +39,7 @@ sns.set_context('paper',
         'font.size': FONTSIZE,
         'axes.labelsize': 'medium',
         'axes.titlesize': 'large',
-        'xtick.labelsize': 'medium',
+        'xtick.labelsize': 'large',
         'ytick.labelsize': 'medium',
         'legend.fontsize': 'medium',
         'legend.title_fontsize': 'large',
@@ -215,7 +215,7 @@ def plot_profiles(data, out_file):
     hm.set_yticklabels(cm.ax_heatmap.get_yticklabels(), rotation='horizontal')
 
     hm.set_ylabel('SNPs', fontsize=FONTSIZE)
-    hm.set_xticklabels(hm.get_xticklabels(), fontsize=FONTSIZE/1.5, va='top')
+    hm.set_xticklabels(hm.get_xticklabels(), fontsize=FONTSIZE, va='top')
 
     cm.ax_cbar.set_title('VAF', fontsize=FONTSIZE)
 
@@ -299,9 +299,11 @@ def main(args):
     if args.SNParray:
         df_snp, matched_samples = get_snp_array_profiles(args.SNParray, rel_loci)
         label = 'SNP array'
+        out_suffix = 'SNParray'
     else:
         df_snp, matched_samples = get_rna_profiles(args.RNA, rel_loci)
         label = 'scRNA-seq'
+        out_suffix = 'scRNA'
 
     df = df_dna.merge(df_snp, left_index=True, right_index=True, how='inner')
     if df.size == 0:
@@ -386,15 +388,15 @@ def main(args):
     
     out_base = re.sub(r'(.*)_\d+.filtered_variants.csv$', r'\1', args.input[0])
     if not args.outfile_assignment:
-        args.outfile_assignment = f'{out_base}.sample_patient_assigments.tsv'
+        args.outfile_assignment = f'{out_base}.{out_suffix}.sample_patient_assigments.tsv'
     assign_clusters(dist_df, samples, matched_samples, args.outfile_assignment)
 
     if not args.outfile_profiles:
-        args.outfile_profiles = f'{out_base}.sample_patient_profiles.png'
+        args.outfile_profiles = f'{out_base}.{out_suffix}.sample_patient_profiles.png'
     plot_profiles(df.T, args.outfile_profiles)
 
     if not args.outfile_distance:
-        args.outfile_distance = f'{out_base}.sample_patient_distance.png'
+        args.outfile_distance = f'{out_base}.{out_suffix}.sample_patient_distance.png'
     plot_distance(dist_df, args.outfile_distance)
 
 

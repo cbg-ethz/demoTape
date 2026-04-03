@@ -53,6 +53,9 @@ def main(args):
     else:
         assign = {'': np.array([])}
 
+    if args.depth < 1:
+        args.minDP = int(args.minDP * args.depth)
+
     for cl, cells in assign.items():
         if len(args.input) == 1:
             df1, gt1, VAF = process_loom(args, cells)
@@ -144,14 +147,17 @@ def main(args):
                     f_r.write(f'{snv+1} {cell+1} {RD.iloc[snv, cell]}\n')
                     f_a.write(f'{snv+1} {cell+1} {AD.iloc[snv, cell]}\n')
 
-        DP_file = f'{out_base_file}.filtered_variants_DP.csv'
-        DP.T.to_csv(DP_file, index=True, header=True, index_label='cell_id')
+        DP_T_file = f'{out_base_file}.filtered_variants_DP_T.csv'
+        DP.T.to_csv(DP_T_file, index=True, header=True, index_label='cell_id')
 
         AD_file = f'{out_base_file}.filtered_variants_AD.csv'
-        AD.to_csv(AD_file, index=True, header=True, index_label='cell_id')
+        AD.to_csv(AD_file, index=True, header=True, index_label='position')
+
+        AD_T_file = f'{out_base_file}.filtered_variants_AD_T.csv'
+        AD.T.to_csv(AD_T_file, index=True, header=True, index_label='cell_id')
 
         RD_file = f'{out_base_file}.filtered_variants_RD.csv'
-        RD.to_csv(RD_file, index=True, header=True, index_label='cell_id')
+        RD.to_csv(RD_file, index=True, header=True, index_label='position')
 
 
 def save_vcf(df, out_file):
@@ -380,45 +386,60 @@ def multiplex_looms(args):
                 df_new = pd.DataFrame(ds[:, samples[i]['idx']],
                     index=index, columns=cols)
                 ampl_new = pd.Series(ds.ra['amplicon'], index=index, name=0)
-                DP_new = pd.DataFrame(ds.layers['DP'][:,samples[i]['idx']],
-                    index=index, columns=cols)
                 GQ_new = pd.DataFrame(ds.layers['GQ'][:,samples[i]['idx']],
                     index=index, columns=cols)
                 AD_new = pd.DataFrame(ds.layers['AD'][:,samples[i]['idx']],
                     index=index, columns=cols)
                 RO_new = pd.DataFrame(ds.layers['RO'][:,samples[i]['idx']],
                     index=index, columns=cols)
-
-                barcodes = np.char.add(
-                    ds.col_attrs['barcode'][samples[i]['idx']], f'.pat{i:.0f}')
-                barcode_length = int(barcodes.dtype.str[2:])
-                samples[i]['name'] = barcodes.astype(f'<U{2*barcode_length+1}')
+            
+                samples[i]['name'] = np.char.add(
+                    ds.col_attrs['barcode'][samples[i]['idx']].astype(str),
+                    f'.pat{i:.0f}')
 
         # First sample, nothing to merge
         if i == 0:
             df = df_new
             ampl = ampl_new
-            DP = DP_new
             GQ = GQ_new
             AD = AD_new
             RO = RO_new
-            continue
-
         # Merge amplicons (keep all)
-        ampl = ampl.combine_first(ampl_new)
-        df = df.merge(df_new, left_index=True, right_index=True)
-        DP = DP.merge(DP_new, left_index=True, right_index=True)
-        GQ = GQ.merge(GQ_new, left_index=True, right_index=True)
-        AD = AD.merge(AD_new, left_index=True, right_index=True)
-        RO = RO.merge(RO_new, left_index=True, right_index=True)
+        else:
+            df = df.merge(df_new, left_index=True, right_index=True)
+            ampl = ampl.combine_first(ampl_new)
+            GQ = GQ.merge(GQ_new, left_index=True, right_index=True)
+            AD = AD.merge(AD_new, left_index=True, right_index=True)
+            RO = RO.merge(RO_new, left_index=True, right_index=True)
 
     del df_new
     del ampl_new
-    del DP_new
     del GQ_new
     del AD_new
     del RO_new
     gc.collect()
+
+    # Downsample reference and alternative allele depth, if set
+    if args.depth < 1:
+        print(f'Before downsampling:\n'
+            f'\tAD mean depth: {AD.mean().mean()}\n'
+            f'\tRO mean depth: {RO.mean().mean()}')
+        batch_size = 10000
+        batches = AD.shape[0] // batch_size + 1
+        print(f'Downsampling reads to {args.depth*100:.0f}% ({batches} batches)')
+        for i in range(batches):
+            start_idx = i * batch_size
+            end_idx = start_idx + batch_size
+
+            for depth in (AD, RO):
+                down = np.random.binomial(
+                    depth.iloc[start_idx:end_idx,:].values, args.depth)
+                depth.iloc[start_idx:end_idx,:] = down.astype('int16')
+                
+        print(f'After downsampling:\n'
+            f'\tAD mean depth: {AD.mean().mean()}\n'
+            f'\tRO mean depth: {RO.mean().mean()}')
+    DP = AD + RO
 
     # Add doublets (if doublets arg specified)
     print('Generating doublets')
@@ -437,8 +458,8 @@ def multiplex_looms(args):
         c1_idx = np.random.choice(samples[s1]['idx'].size)
         c2_idx = np.random.choice(samples[s2]['idx'].size)
 
-        c1 = samples[s1]['idx'][c1_idx]  + ((s1 + 1) / 10)
-        c2 = samples[s2]['idx'][c2_idx]  + ((s2 + 1) / 10)
+        c1 = samples[s1]['idx'][c1_idx] + ((s1 + 1) / 10)
+        c2 = samples[s2]['idx'][c2_idx] + ((s2 + 1) / 10)
 
         new_id = f'{c1}+{c2}'
         new_name = f'{samples[s1]["name"][c1_idx]}+{samples[s2]["name"][c2_idx]}'
@@ -457,17 +478,31 @@ def multiplex_looms(args):
 
         drop_cells.extend([c1, c2])
 
-    df = df.join(pd.DataFrame(dbt_gt, index=df.index))
+    print('Merging doublets')
     DP = DP.join(pd.DataFrame(dbt_DP, index=df.index))
-    GQ = GQ.join(pd.DataFrame(dbt_GQ, index=df.index))
-    AD = AD.join(pd.DataFrame(dbt_AD, index=df.index))
-    RO = RO.join(pd.DataFrame(dbt_RO, index=df.index))
-
-    df.drop(drop_cells, axis=1, inplace=True)
+    del dbt_DP
+    gc.collect()
     DP.drop(drop_cells, axis=1, inplace=True)
+
+    GQ = GQ.join(pd.DataFrame(dbt_GQ, index=df.index))
+    del dbt_GQ
+    gc.collect()
     GQ.drop(drop_cells, axis=1, inplace=True)
+
+    AD = AD.join(pd.DataFrame(dbt_AD, index=df.index))
+    del dbt_AD
+    gc.collect()
     AD.drop(drop_cells, axis=1, inplace=True)
+
+    RO = RO.join(pd.DataFrame(dbt_RO, index=df.index))
+    del dbt_RO
+    gc.collect()
     RO.drop(drop_cells, axis=1, inplace=True)
+
+    df = df.join(pd.DataFrame(dbt_gt, index=df.index))
+    del dbt_gt
+    gc.collect()
+    df.drop(drop_cells, axis=1, inplace=True)
 
     gt = df.fillna(3).values
     index = df.index.values
@@ -713,6 +748,8 @@ def parse_args():
         help='Multiplex ratio (#arguments == #inputs).')
     multiplex.add_argument('-d', '--doublets', type=float, default=0,
         help='Fraction of doublet. Default = 0.')
+    multiplex.add_argument('-dp', '--depth', type=float, default=1,
+        help='Downsampling fraction. Default = 1 (i.e, no downsampling).')
 
     downsample = parser.add_argument_group('downsample simulations')
     downsample.add_argument('-c', '--cell_no', type=float, default=np.inf,
@@ -720,9 +757,6 @@ def parse_args():
             'Default = None')
 
     mosaic = parser.add_argument_group('mosaic')
-    mosaic.add_argument('-mStd', '--minStd', type=float, default=0.1,
-        help='Minimum StandardDeviation at a loci to consider a variant.' \
-            'If the Std is lower, the loci is considered a germline/artefact')
     mosaic.add_argument('-mGQ', '--minGQ', type=int, default=30,
         help='Minimum GQ to consider a variant (per cell).')
     mosaic.add_argument('-mDP', '--minDP', type=int, default=10,

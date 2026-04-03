@@ -1,0 +1,30 @@
+simulations:
+  input-looms: [
+    /home/hw/Desktop/mincedTapestri/results/run_bsse/SID3841/SID3841.cells.loom,
+    /home/hw/Desktop/mincedTapestri/results/run_bsse/SID3867/SID3867.cells.loom,
+    /home/hw/Desktop/mincedTapestri/results/run_bsse/SID5962/SID5962.cells.loom]
+  output-folder: /home/hw/Desktop/mincedTapestri/results/run_bsse/simulations
+  repeats: 1
+  fractions: [0.33, 0.33, 0.33] # [[0.6, 0.3, 0.1]] # [0.33, 0.33, 0.33]
+  doublets: [0.1] # [0.3]
+  downsamples: [0.1, 0.25, 0.5]
+
+  algorithms:
+    demoTape:
+      run: True
+
+    scSplit:
+      run: True
+      exe: /home/hw/Desktop/scSplit/scSplit
+
+    souporcell:
+      run: True
+      exe: /home/hw/Desktop/souporcell/souporcell/target/release/souporcell
+      troublet: /home/hw/Desktop/souporcell/troublet/target/release/troublet
+
+    vireo:
+      run: True
+
+    doubletD:
+      run: True
+      exe: 

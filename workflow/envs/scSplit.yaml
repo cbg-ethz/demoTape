@@ -6,7 +6,7 @@ dependencies:
     - numpy
     - pandas
     - pysam
-    - PyVCF
+    - open-cravat
     - scikit-learn
     - scipy
     - statistics

@@ -15,7 +15,7 @@ import seaborn as sns
 EPSILON = np.finfo(np.float64).resolution
 
 FILE_EXT = '.png'
-FONTSIZE = 16
+FONTSIZE = 18
 DPI = 300
 sns.set_style('whitegrid') #darkgrid, whitegrid, dark, white, ticks
 sns.set_context('paper',
@@ -31,7 +31,7 @@ sns.set_context('paper',
         'ytick.labelsize': 'medium',
         'legend.fontsize': 'medium',
         'legend.title_fontsize': 'large',
-        'axes.labelticksize': 10
+        'axes.labelticksize': 50
 })
 
 CHR_ORDER = dict({str(i): i for i in range(1, 23, 1)}, **{'X': 23, 'Y': 24})
@@ -185,15 +185,13 @@ def plot_heatmap(df, s_ca, df_called, out_file):
     hm.set_facecolor('#636161')
 
     hm.set_ylabel('Cells')
-    if VAF.shape[0] > 50:
+    if df_plot.shape[0] > 50:
         hm.set_yticks([])
 
     hm.set_xlabel('SNPs')
-    hm.set_xticklabels(hm.get_xticklabels(), fontsize=int(FONTSIZE * 0.75), va='top')
+    hm.set_xticklabels(hm.get_xticklabels(), fontsize=FONTSIZE, va='top')
 
     cm.ax_cbar.set_title('VAF', fontsize=FONTSIZE)
-    # plt.show()
-    # exit()
 
     if out_file:
         cm.fig.savefig(out_file, dpi=DPI)

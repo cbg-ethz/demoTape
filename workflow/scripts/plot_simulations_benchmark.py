@@ -3,6 +3,7 @@
 import argparse
 import os
 import re
+from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -21,14 +22,16 @@ ALG_MAP = {
     'Euclidean': 'demoTape',
     'souporcell': 'souporcell',
     'demoTape': 'demoTape',
-    'vireo': 'vireo'
+    'vireo': 'vireo',
+    'doubletD': 'doubletD'
 }
-COLORS = {
+COLORS = OrderedDict({
     'demoTape': '#F24C3D',
     'scSplit': '#F2BE22',
     'souporcell': '#22A699',
     'vireo': '#325FB0',
-}
+    'doubletD': '#C7327E'
+})
 METRIC = 'cpu_time'
 
 
@@ -64,12 +67,12 @@ def main(in_file, out_file):
 def plot_runtime(df, out_file):
     x_id = 'algorithm'
 
-    fig, ax = plt.subplots(figsize=(12, 12))
+    fig, ax = plt.subplots(figsize=(14, 12))
     
     bp = sns.boxplot(
         data=df,
         x=x_id,
-        order=sorted(COLORS.keys()),
+        order=COLORS.keys(),
         y=METRIC,
         ax=ax,
         palette=COLORS,
@@ -80,7 +83,7 @@ def plot_runtime(df, out_file):
     sns.stripplot(
         data=df,
         x=x_id,
-        order=sorted(COLORS.keys()),
+        order=COLORS.keys(),
         y=METRIC,
         ax=ax,
         palette=COLORS,
