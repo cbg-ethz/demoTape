@@ -1,6 +1,6 @@
 name: vireo
 dependencies:
-  - python
-  - pip
+  - python ==3.13.2
+  - pip ==25.0
   - pip:
-    - vireoSNP
+    - vireoSNP ==0.5.9

@@ -5,4 +5,4 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - doubletd
+  - doubletd == 0.1.0

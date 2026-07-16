@@ -1,8 +1,1 @@
-loompy
-matplotlib
-numpy
-pandas
-scikit-learn
-scipy
-seaborn
-snakemake
+snakemake>=8.0.0
